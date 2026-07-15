@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sarv India Home Furnishing</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body,html{overflow-x:hidden;width:100%;background-color:#f3f4f6;}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-track{background:#f1f1f1;}
+    ::-webkit-scrollbar-thumb{background:#3b82f6;border-radius:10px;}
+    .signature-canvas{touch-action:none;user-select:none;}
+    @keyframes pulse-sync{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.4;transform:scale(1.15);}}
+    .pulse-sync-active{animation:pulse-sync 1.0s infinite;}
+    .printable-pdf-page{width:794px;height:1123px;background-color:#ffffff;color:#000000;padding:30px;box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;position:relative;}
+  </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased text-gray-950">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJILDaZ5gWzmD4WKisMrG3OND_0lpHjmJOCUHoGOkVWsN3y2U9CZ9wIK-9MmYA7WNx/exec";
+
+// Role -> allowed fields map (mirrors Code.gs exactly)
+const ROLE_FIELD_MAP = {
+  WEAVING:["sampleNo","lotNo","quality","bedSize","blanketPly","reqBlanketPcsWeightWithoutEverything","raschelGuage","raschelPyleHeight","pcPoDenier","pcPoEnds","microDenier","microEnds","raschelRollWeight","pcsWeightRequired","raschelWidth","afterRaschelSize","raschelRollLength","totalNoOfRoll","sign_weavingRaschelMaster","sign_checkedRaschel"],
+  SLITTING:["slittingSpeed","afterSlittingSize","afterSlittingMagnet","mendingCheck","sign_slittingRaschelMaster"],
+  STENTER:["stenterYesNo","beforeStenterWidth","stenterTemp","topBlowerSpeed","bottomBlowerSpeed","stenterSpeed","afterStenterSize","sign_stenterMaster1","stenterSpeed2","stenterTemp2","topBlowerSpeed2","bottomBlowerSpeed2","afterStenterSize2","sign_stenterMaster2"],
+  GREY_POLISH:["polishBeforeBrushingYesNo","polishSpeed","polishTemp","tableBrushingSpeed","highSpeedBrushingYesNo","highSpeedBrushingSpeed","afterHighSpeedBrushingSize","howManyPolishMachineUsed","howManyCylinderUsed","greyPolishSpeed","greyPolishTemp","afterGreyPolishSize","sign_greyPolishMaster","sign_checkedGreyPolish"],
+  PRINTING:["printingDesignPhoto","printingChemical","printingRepeat","azerHoldingTime","afterAzerSize","washingChemical","washingTemp","washingSpeed","hydro","caustic","soaping","silicon1","silicon2","bouncing","afterWashingSize","dryerProcess","dryerSpeed","dryerTemp","afterDryerSize","sign_printingMaster","sign_checkedPrinting"],
+  FINISHING:["finishPolishBeforeBrushingYesNo","finishPolishSpeed","finishPolishTemp","afterPolishSize","finishTableBrushingSpeed","afterBrushingSize","finishHighSpeedBrushingYesNo","finishHighSpeedBrushingSpeed","afterHighSpeedSize","raisingYesNo","howManyRaisingMachine","percentRaising","afterRaisingSize","howManyPolisherFinal","howManyPolycutFinal","polisherSpeedFinal","polisherTempFinal","afterFinalPolisherSize","embossYesNo","tempOfEmboss","holdingTimeOfEmboss","sign_finishingMaster","sign_checkedFinishing"],
+  PACKING:["totalPcs","averagePcsLength","averagePcsWidth","avgPcsWeight","totalWasteWeight","label","sign_packingContractor"],
+  QC_GM:["sign_checkedRaschel","sign_checkedGreyPolish","sign_checkedPrinting","sign_checkedFinishing","sign_checkedGM","sampleApprovedYesNo","sign_approvedMD"],
+  ADMIN:"ALL"
+};
+
+const ROLE_LABELS = {WEAVING:"Raschel Master",SLITTING:"Slitting Master",STENTER:"Stenter Master",GREY_POLISH:"Grey Polish Master",PRINTING:"Printing Master",FINISHING:"Finishing Master",PACKING:"Packing Contractor",QC_GM:"GM / Quality Check",ADMIN:"Administrator"};
+const ROLE_COLORS = {WEAVING:"bg-blue-700",SLITTING:"bg-indigo-700",STENTER:"bg-violet-700",GREY_POLISH:"bg-cyan-700",PRINTING:"bg-green-700",FINISHING:"bg-teal-700",PACKING:"bg-orange-700",QC_GM:"bg-red-700",ADMIN:"bg-gray-900"};
+
+const initialFormState = {
+  sampleNo:'',isSubmitted:false,pdfDriveUrl:'',
+  raschelGuage:'',lotNo:'',raschelPyleHeight:'',pcPoDenier:'',pcPoEnds:'',
+  microDenier:'',microEnds:'',raschelRollWeight:'',pcsWeightRequired:'',
+  raschelWidth:'',afterRaschelSize:'',raschelRollLength:'',totalNoOfRoll:'',
+  quality:'',bedSize:'DOUBLE',blanketPly:'SINGLE PLY',reqBlanketPcsWeightWithoutEverything:'',
+  slittingSpeed:'',afterSlittingSize:'',afterSlittingMagnet:'',mendingCheck:'',
+  stenterYesNo:'NO',beforeStenterWidth:'',stenterTemp:'',topBlowerSpeed:'',bottomBlowerSpeed:'',stenterSpeed:'',afterStenterSize:'',
+  polishBeforeBrushingYesNo:'NO',polishSpeed:'',polishTemp:'',tableBrushingSpeed:'',
+  highSpeedBrushingYesNo:'NO',highSpeedBrushingSpeed:'',afterHighSpeedBrushingSize:'',
+  howManyPolishMachineUsed:'',howManyCylinderUsed:'',greyPolishSpeed:'',greyPolishTemp:'',afterGreyPolishSize:'',
+  printingDesignPhoto:'',printingChemical:'',printingRepeat:'',azerHoldingTime:'',
+  afterAzerSize:'',washingChemical:'',washingTemp:'',washingSpeed:'',hydro:'',
+  caustic:'',soaping:'',silicon1:'',silicon2:'',bouncing:'',afterWashingSize:'',dryerProcess:'DRYER',
+  stenterSpeed2:'',stenterTemp2:'',topBlowerSpeed2:'',bottomBlowerSpeed2:'',afterStenterSize2:'',
+  dryerSpeed:'',dryerTemp:'',afterDryerSize:'',
+  finishPolishBeforeBrushingYesNo:'NO',finishPolishSpeed:'',finishPolishTemp:'',
+  afterPolishSize:'',finishTableBrushingSpeed:'',afterBrushingSize:'',
+  finishHighSpeedBrushingYesNo:'NO',finishHighSpeedBrushingSpeed:'',afterHighSpeedSize:'',
+  raisingYesNo:'NO',howManyRaisingMachine:'',percentRaising:'',afterRaisingSize:'',
+  howManyPolisherFinal:'',howManyPolycutFinal:'',polisherSpeedFinal:'',polisherTempFinal:'',afterFinalPolisherSize:'',
+  embossYesNo:'NO',tempOfEmboss:'',holdingTimeOfEmboss:'',
+  totalPcs:'',averagePcsLength:'',averagePcsWidth:'',avgPcsWeight:'',totalWasteWeight:'',label:'',
+  sign_weavingRaschelMaster:'',sign_slittingRaschelMaster:'',sign_stenterMaster1:'',
+  sign_greyPolishMaster:'',sign_printingMaster:'',sign_stenterMaster2:'',
+  sign_finishingMaster:'',sign_packingContractor:'',sign_checkedRaschel:'',
+  sign_checkedGreyPolish:'',sign_checkedPrinting:'',sign_checkedFinishing:'',
+  sign_checkedGM:'',sampleApprovedYesNo:'YES',sign_approvedMD:''
+};
+
+function canEditField(role,field){
+  if(!role) return false;
+  if(role==='ADMIN') return true;
+  const a=ROLE_FIELD_MAP[role];
+  if(!a) return false;
+  return Array.isArray(a)?a.includes(field):false;
+}
+
+// ── Input Component ──────────────────────────────────────────────────────────
+const Input=({label,type="text",value,onChange,onBlurSync,options,readOnly=false,noAccess=false,isSectionLocked=false})=>{
+  const safeVal=value??'';
+  const disabled=readOnly||noAccess||isSectionLocked;
+  const cls=`w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xs ${disabled?'bg-gray-100 text-gray-500 cursor-not-allowed font-semibold':'bg-white'}`;
+  return(
+    <div className="flex flex-col w-full">
+      <label className="text-[10px] font-black text-gray-700 mb-0.5 uppercase tracking-wide flex items-center gap-1">
+        {label}
+        {isSectionLocked&&<span className="text-red-500 text-[9px]">🔒</span>}
+        {noAccess&&!isSectionLocked&&<span className="text-amber-500 text-[9px]">🚫</span>}
+      </label>
+      {type==="select"?(
+        <select value={safeVal} onChange={e=>{onChange(e.target.value);if(onBlurSync)onBlurSync();}} disabled={disabled} className={cls}>
+          {options.map(o=><option key={o} value={o}>{o}</option>)}
+        </select>
+      ):(
+        <input type={type} value={safeVal} onChange={e=>onChange(e.target.value)} onBlur={onBlurSync} disabled={disabled}
+          placeholder={isSectionLocked?"Locked (Signed)":noAccess?"No access — different section":`Enter ${label}`}
+          className={cls}/>
+      )}
+    </div>
+  );
+};
+
+// ── Section Component ────────────────────────────────────────────────────────
+const Section=({title,children,defaultOpen=false,isSectionLocked=false})=>{
+  const [open,setOpen]=useState(defaultOpen);
+  return(
+    <div className={`mb-3 border rounded-xl shadow-sm overflow-hidden ${isSectionLocked?'border-red-200':'border-blue-200'}`}>
+      <div className={`px-3.5 py-3 font-bold flex justify-between items-center cursor-pointer select-none active:scale-[0.99] ${isSectionLocked?'bg-gradient-to-r from-red-700 to-red-600 text-white':'bg-gradient-to-r from-blue-700 to-blue-600 text-white'}`}
+        onClick={()=>setOpen(!open)}>
+        <span className="text-xs font-extrabold uppercase flex items-center gap-1.5">
+          {isSectionLocked&&<>🔒<span className="text-[10px] bg-red-800 px-1.5 py-0.5 rounded font-black">SIGNED & LOCKED</span></>} {title}
+        </span>
+        <span>{open?'▲':'▼'}</span>
+      </div>
+      {open&&<div className="p-3.5 space-y-3.5 bg-white">{children}</div>}
+    </div>
+  );
+};
+
+// ── Signature Pad Component ──────────────────────────────────────────────────
+const SignaturePad=({title,value,onChange,onClearAttempt,noAccess=false,isSectionLocked=false})=>{
+  const [isOpen,setIsOpen]=useState(false);
+  const canvasRef=useRef(null);
+  const [isDrawing,setIsDrawing]=useState(false);
+  const lastPos=useRef({x:0,y:0});
+  const rectCache=useRef(null);
+  const locked=noAccess||isSectionLocked;
+  const hasSign=value&&value!=='NA_BYPASSED'&&value!=='';
+
+  useEffect(()=>{
+    if(!isOpen) return;
+    const t=setTimeout(()=>{
+      const c=canvasRef.current; if(!c) return;
+      const ctx=c.getContext('2d');
+      ctx.strokeStyle="#1e3a8a";ctx.lineWidth=3.5;ctx.lineCap="round";ctx.lineJoin="round";
+      if(value&&value!=='NA_BYPASSED'&&value!=='DONE'){
+        const img=new Image(); img.onload=()=>{ctx.clearRect(0,0,c.width,c.height);ctx.drawImage(img,0,0);}; img.src=value;
+      } else ctx.clearRect(0,0,c.width,c.height);
+    },100);
+    return()=>clearTimeout(t);
+  },[isOpen,value]);
+
+  const getCoords=(e,rect)=>{
+    if(!rect) return{x:0,y:0};
+    const cx=e.touches&&e.touches.length>0?e.touches[0].clientX:e.clientX;
+    const cy=e.touches&&e.touches.length>0?e.touches[0].clientY:e.clientY;
+    return{x:cx-rect.left,y:cy-rect.top};
+  };
+  const startDraw=e=>{
+    if(locked) return;
+    const c=canvasRef.current; if(!c) return;
+    rectCache.current=c.getBoundingClientRect();
+    lastPos.current=getCoords(e,rectCache.current); setIsDrawing(true);
+    if(navigator.vibrate) navigator.vibrate(15);
+  };
+  const draw=e=>{
+    if(!isDrawing||locked) return;
+    if(e.cancelable) e.preventDefault();
+    const c=canvasRef.current; const ctx=c.getContext('2d');
+    if(!rectCache.current) rectCache.current=c.getBoundingClientRect();
+    const pos=getCoords(e,rectCache.current);
+    ctx.beginPath();ctx.moveTo(lastPos.current.x,lastPos.current.y);ctx.lineTo(pos.x,pos.y);ctx.stroke();
+    lastPos.current=pos;
+  };
+  const stopDraw=()=>{if(isDrawing&&!locked) setIsDrawing(false);};
+  const handleSave=()=>{
+    if(locked) return;
+    onChange(canvasRef.current.toDataURL('image/png',0.5));
+    setIsOpen(false);
+    if(navigator.vibrate) navigator.vibrate(80);
+  };
+
+  return(
+    <div className={`border rounded-xl p-3 my-2 shadow-sm ${isSectionLocked?'border-red-200 bg-red-50/10':noAccess?'border-amber-200 bg-amber-50/10':'border-gray-300 bg-white'}`}>
+      <div className="flex justify-between items-center mb-2">
+        <label className="font-extrabold text-xs text-gray-700 tracking-wide uppercase flex items-center gap-1">
+          {isSectionLocked&&<span className="text-red-600">🔒</span>}
+          {noAccess&&!isSectionLocked&&<span className="text-amber-500">🚫</span>}
+          {title}
+        </label>
+        {hasSign&&!locked&&(
+          <button type="button" onClick={onClearAttempt} className="text-[10px] bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded-lg font-bold">
+            Clear (Admin)
+          </button>
+        )}
+      </div>
+      {noAccess&&!isSectionLocked?(
+        <div className="h-10 flex items-center justify-center text-[10px] text-amber-600 font-bold bg-amber-50 border border-amber-200 rounded-lg">
+          🚫 Signature access restricted to section owner
+        </div>
+      ):hasSign?(
+        <div className="flex flex-col items-center p-2.5 border rounded-lg bg-gray-50 shadow-inner">
+          {value==='DONE'?(
+            <div className="h-16 flex flex-col items-center justify-center text-blue-900 font-extrabold text-xs uppercase tracking-wide bg-blue-50 border border-blue-200 w-full rounded-lg">
+              <span className="text-lg">✓</span><span>DIGITAL SIGN VERIFIED</span><span className="text-[9px] text-blue-500">(DONE)</span>
+            </div>
+          ):(
+            <img src={value} alt="Signature" className="h-16 object-contain"/>
+          )}
+          {!locked&&(
+            <button type="button" onClick={()=>setIsOpen(true)} className="mt-2 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold py-1 px-3 rounded-lg">
+              🔄 RE-SIGN
+            </button>
+          )}
+          <p className="text-green-600 text-[10px] mt-1 font-bold">✓ Signed & Section Locked 🔒</p>
+        </div>
+      ):(
+        <button type="button" disabled={locked} onClick={()=>setIsOpen(true)}
+          className="w-full py-4 border-2 border-dashed border-blue-300 bg-blue-50/20 text-blue-700 hover:bg-blue-50/40 rounded-xl font-black text-xs flex items-center justify-center gap-2 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed">
+          📝 CLICK TO SIGN / हस्ताक्षर करें
+        </button>
+      )}
+      {isOpen&&(
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white p-4 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-300">
+            <h3 className="font-extrabold text-sm text-gray-800 mb-3 uppercase text-center">{title}</h3>
+            <p className="text-[10px] text-gray-500 mb-2 text-center">उंगली से नीचे BOX में हस्ताक्षर करें:</p>
+            <canvas ref={canvasRef} width={340} height={150}
+              className="signature-canvas border-2 border-dashed border-blue-200 bg-blue-50/10 w-full rounded-xl cursor-crosshair shadow-inner"
+              style={{touchAction:'none'}}
+              onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
+              onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={stopDraw}/>
+            <div className="flex gap-2.5 mt-4">
+              <button type="button" onClick={()=>setIsOpen(false)} className="flex-1 bg-gray-200 text-gray-800 font-bold py-2 rounded-xl text-xs">Cancel</button>
+              <button type="button" onClick={()=>{const c=canvasRef.current;if(c)c.getContext('2d').clearRect(0,0,c.width,c.height);}} className="flex-1 bg-yellow-100 text-yellow-800 font-bold py-2 rounded-xl text-xs">Clear Box</button>
+              <button type="button" onClick={handleSave} className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-xl text-xs shadow-md">Save Sign</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+function App(){
+  // Auth
+  const [currentUser,setCurrentUser]=useState(null);
+  const [loginUser,setLoginUser]=useState('');
+  const [loginPass,setLoginPass]=useState('');
+  const [loginLoading,setLoginLoading]=useState(false);
+  const [loginError,setLoginError]=useState('');
+  // Navigation
+  const [splash,setSplash]=useState(true);
+  const [appMode,setAppMode]=useState('menu');
+  // Form
+  const [sampleNoInput,setSampleNoInput]=useState('');
+  const [activeSampleId,setActiveSampleId]=useState(null);
+  const [formData,setFormData]=useState(initialFormState);
+  const [status,setStatus]=useState('System Ready');
+  const [cloudSyncing,setCloudSyncing]=useState(false);
+  const [submitting,setSubmitting]=useState(false);
+  const [samplesList,setSamplesList]=useState([]);
+  const [fetchingForm,setFetchingForm]=useState(false);
+  const [isOnline,setIsOnline]=useState(navigator.onLine);
+  // Admin modal (replaces @0017)
+  const [showAdminModal,setShowAdminModal]=useState(false);
+  const [adminAction,setAdminAction]=useState('');
+  const [adminTarget,setAdminTarget]=useState('');
+  const [adminPass,setAdminPass]=useState('');
+  const [adminPassErr,setAdminPassErr]=useState('');
+  // Notification
+  const [notif,setNotif]=useState({show:false,msg:'',type:'info'});
+  const showAlert=(msg,type='info')=>setNotif({show:true,msg,type});
+  const closeAlert=()=>setNotif({show:false,msg:'',type:'info'});
+
+  // Splash
+  useEffect(()=>{const t=setTimeout(()=>setSplash(false),2000);return()=>clearTimeout(t);},[]);
+
+  // Online status
+  useEffect(()=>{
+    const on=()=>setIsOnline(true);const off=()=>setIsOnline(false);
+    window.addEventListener('online',on);window.addEventListener('offline',off);
+    return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};
+  },[]);
+
+  // Restore session
+  useEffect(()=>{
+    const s=localStorage.getItem('sarv_session');
+    if(s){try{setCurrentUser(JSON.parse(s));}catch(e){}}
+  },[]);
+
+  // Prevent accidental close during form
+  useEffect(()=>{
+    const h=e=>{if(appMode==='form'&&activeSampleId){e.preventDefault();e.returnValue="";}};
+    window.addEventListener('beforeunload',h);return()=>window.removeEventListener('beforeunload',h);
+  },[appMode,activeSampleId]);
+
+  // Auto-save to localStorage
+  useEffect(()=>{
+    if(!activeSampleId) return;
+    const t=setTimeout(()=>{
+      localStorage.setItem(`sarv_sample_${activeSampleId}`,JSON.stringify(formData));
+      const l=JSON.parse(localStorage.getItem('sarv_samples_list')||'[]');
+      if(!l.includes(activeSampleId)){l.push(activeSampleId);localStorage.setItem('sarv_samples_list',JSON.stringify(l));}
+    },1000);
+    return()=>clearTimeout(t);
+  },[formData,activeSampleId]);
+
+  // Section lock states (based on signatures present)
+  const isWeavingLocked=!!formData.sign_weavingRaschelMaster;
+  const isSlittingLocked=!!formData.sign_slittingRaschelMaster;
+  const isStenter1Locked=!!formData.sign_stenterMaster1&&formData.stenterYesNo==='YES';
+  const isGreyPolishLocked=!!formData.sign_greyPolishMaster;
+  const isPrintingLocked=!!formData.sign_printingMaster;
+  const isStenter2Locked=!!formData.sign_stenterMaster2||formData.dryerProcess==='DRYER';
+  const isFinishingLocked=!!formData.sign_finishingMaster;
+  const isPackingLocked=!!formData.sign_packingContractor;
+
+  // Pending signatures for submit check
+  const getPendingSigs=()=>{
+    const sigs={sign_weavingRaschelMaster:"Raschel Master (Weaving)",sign_slittingRaschelMaster:"Slitting Master",sign_stenterMaster1:"Stenter Master 1",sign_greyPolishMaster:"Grey Polish Master",sign_printingMaster:"Printing Master",sign_stenterMaster2:"Stenter Master 2",sign_finishingMaster:"Finishing Master",sign_packingContractor:"Packing Contractor",sign_checkedRaschel:"QC: Raschel",sign_checkedGreyPolish:"QC: Grey Polish",sign_checkedPrinting:"QC: Printing",sign_checkedFinishing:"QC: Finishing",sign_checkedGM:"QC: GM",sign_approvedMD:"MD Approval"};
+    return Object.keys(sigs).filter(k=>{
+      if(k==='sign_stenterMaster2'&&formData.dryerProcess==='DRYER') return false;
+      if(k==='sign_stenterMaster1'&&formData.stenterYesNo==='NO') return false;
+      const v=formData[k]; return !v||v===''||v==='NA_BYPASSED';
+    }).map(k=>({key:k,name:sigs[k]}));
+  };
+  const pendingSigs=getPendingSigs();
+  const allSigsDone=pendingSigs.length===0;
+
+  // Field permission helper
+  const fe=(field)=>!canEditField(currentUser?.role,field); // fe = field externally locked
+
+  // getVal for PDF
+  const getVal=(f)=>(formData[f]!==undefined&&formData[f]!==null&&String(formData[f]).trim()!=='')?formData[f]:'NA';
+
+  // ── UPDATE FIELD ────────────────────────────────────────────────────────────
+  const updateField=(field,value)=>{
+    if(!canEditField(currentUser?.role,field)) return;
+    setFormData(prev=>{
+      const next={...prev,[field]:value};
+      const autoSync=['sign_','dryerProcess','stenterYesNo','polishBeforeBrushingYesNo','highSpeedBrushingYesNo','finishHighSpeedBrushingYesNo','finishPolishBeforeBrushingYesNo','raisingYesNo','embossYesNo','bedSize','blanketPly','sampleApprovedYesNo'];
+      if(autoSync.some(p=>field.startsWith(p)||field===p)) triggerSync(next);
+      return next;
+    });
+  };
+
+  // ── CLOUD SYNC ──────────────────────────────────────────────────────────────
+  const triggerSync=async(data=formData)=>{
+    if(!activeSampleId||!data.sampleNo) return;
+    const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]');
+    if(del.map(i=>String(i).toUpperCase()).includes(String(activeSampleId).toUpperCase())) return;
+    if(!isOnline){setStatus('Offline — saved to device memory.');return;}
+    setCloudSyncing(true);setStatus('Syncing to Google Sheets...');
+    try{
+      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,username:currentUser?.username||''})});
+      setStatus('✅ Synced to Sheet!');
+    }catch(e){setStatus('Sync error. Will retry.');}
+    finally{setCloudSyncing(false);}
+  };
+
+  // ── LOGIN ───────────────────────────────────────────────────────────────────
+  const handleLogin=async()=>{
+    if(!loginUser.trim()||!loginPass.trim()){setLoginError("Username aur password dono daalen.");return;}
+    setLoginLoading(true);setLoginError('');
+    try{
+      const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=login&user=${encodeURIComponent(loginUser.trim())}&pass=${encodeURIComponent(loginPass.trim())}`);
+      const d=await res.json();
+      if(d.valid){
+        const u={username:d.username,role:d.role,displayName:d.displayName,allowedFields:d.allowedFields};
+        setCurrentUser(u);localStorage.setItem('sarv_session',JSON.stringify(u));
+        setLoginUser('');setLoginPass('');
+      }else{setLoginError(d.reason||"Invalid credentials.");}
+    }catch(e){setLoginError("Server se connect nahi ho pa raha.");}
+    finally{setLoginLoading(false);}
+  };
+
+  const handleLogout=()=>{
+    setCurrentUser(null);localStorage.removeItem('sarv_session');
+    setAppMode('menu');setActiveSampleId(null);setFormData(initialFormState);
+  };
+
+  // ── FETCH SAMPLE FROM SHEET ──────────────────────────────────────────────────
+  const loadSample=async(id)=>{
+    setFetchingForm(true);setStatus('Fetching from Google Sheet...');
+    let loaded=false;
+    if(isOnline){
+      try{
+        const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getSample&sampleNo=${encodeURIComponent(id)}`);
+        const d=await res.json();
+        if(d&&d.sampleNo&&!d.error){
+          const merged={...initialFormState,...d};
+          setFormData(merged);localStorage.setItem(`sarv_sample_${id}`,JSON.stringify(merged));
+          setStatus('✅ Live data loaded from Sheet!');loaded=true;
+        }
+      }catch(e){console.error(e);}
+    }
+    if(!loaded){
+      const s=localStorage.getItem(`sarv_sample_${id}`);
+      if(s){setFormData({...initialFormState,...JSON.parse(s)});setStatus('📱 Loaded from device (offline).');}
+      else{setFormData({...initialFormState,sampleNo:id,isSubmitted:false});setStatus('New sample form ready.');}
+    }
+    setFetchingForm(false);
+  };
+
+  // ── FETCH SAMPLE DIRECTORY ───────────────────────────────────────────────────
+  const fetchDirectory=async(type)=>{
+    setStatus('Loading directory...');
+    const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]').map(i=>String(i).toUpperCase());
+    let cloud=[];let cloudOk=false;
+    if(isOnline){try{const r=await fetch(GOOGLE_SCRIPT_URL+"?action=getSamples");cloud=await r.json();if(Array.isArray(cloud))cloudOk=true;}catch(e){}}
+    let merged=[];
+    if(cloudOk){
+      cloud.forEach(ci=>{
+        if(del.includes(String(ci.sampleNo).toUpperCase())) return;
+        const loc=JSON.parse(localStorage.getItem(`sarv_sample_${ci.sampleNo}`)||'{}');
+        merged.push({...ci,...loc});
+      });
+      setStatus('✅ Directory from cloud.');
+    }else{
+      const l=JSON.parse(localStorage.getItem('sarv_samples_list')||'[]');
+      l.forEach(id=>{
+        if(del.includes(String(id).toUpperCase())) return;
+        const d=JSON.parse(localStorage.getItem(`sarv_sample_${id}`)||'{}');
+        if(d.sampleNo) merged.push(d);
+      });
+      setStatus('📱 Offline directory.');
+    }
+    const f=merged.filter(i=>{const s=i.isSubmitted===true||i.isSubmitted==='true'||i.isSubmitted==='TRUE';return type==='submitted'?s:!s;});
+    setSamplesList(f);
+  };
+
+  // ── NEW SAMPLE (ADMIN ONLY) ──────────────────────────────────────────────────
+  const handleNewSample=async()=>{
+    const id=sampleNoInput.trim().toUpperCase();
+    if(!id){showAlert("Sample No enter karein!","warning");return;}
+    if(currentUser?.role!=='ADMIN'){showAlert("Only Admin can create new samples.","warning");return;}
+    const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]').map(i=>String(i).toUpperCase());
+    const loc=JSON.parse(localStorage.getItem('sarv_samples_list')||'[]').map(i=>String(i).toUpperCase());
+    if(loc.includes(id)&&!del.includes(id)){showAlert(`${id} already exists! Resume se kholo.`,"warning");return;}
+    setActiveSampleId(id);await loadSample(id);setAppMode('form');
+  };
+
+  // ── ADMIN MODAL ──────────────────────────────────────────────────────────────
+  const openAdminModal=(action,target='')=>{
+    setAdminAction(action);setAdminTarget(target);setAdminPass('');setAdminPassErr('');setShowAdminModal(true);
+  };
+  const handleAdminVerify=async()=>{
+    if(!adminPass.trim()){setAdminPassErr("Password daalen.");return;}
+    try{
+      const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=login&user=admin&pass=${encodeURIComponent(adminPass.trim())}`);
+      const d=await res.json();
+      if(d.valid&&d.role==='ADMIN'){
+        setShowAdminModal(false);
+        if(adminAction==='clear_sig'){
+          setFormData(prev=>{const n={...prev,[adminTarget]:''};triggerSync(n);return n;});
+          setStatus('Signature cleared by Admin.');
+        }else if(adminAction==='delete'){
+          doDelete(adminTarget);
+        }else if(adminAction==='final_submit'){
+          doFinalSubmit();
+        }
+      }else{setAdminPassErr("Admin password galat hai!");}
+    }catch(e){setAdminPassErr("Server error.");}
+  };
+
+  // ── DELETE ───────────────────────────────────────────────────────────────────
+  const doDelete=(id)=>{
+    const up=String(id).toUpperCase();
+    localStorage.removeItem(`sarv_sample_${up}`);localStorage.removeItem(`sarv_sample_${id}`);
+    const l=JSON.parse(localStorage.getItem('sarv_samples_list')||'[]');
+    localStorage.setItem('sarv_samples_list',JSON.stringify(l.filter(i=>String(i).toUpperCase()!==up)));
+    const d=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]');
+    if(!d.map(i=>String(i).toUpperCase()).includes(up)){d.push(up);localStorage.setItem('sarv_deleted_samples',JSON.stringify(d));}
+    setSamplesList(prev=>prev.filter(i=>String(i.sampleNo).toUpperCase()!==up));
+    showAlert(`Sample ${id} deleted.`,"success");
+    if(isOnline) fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete',sampleNo:up})}).catch(()=>{});
+  };
+
+  // ── PHOTO UPLOAD ─────────────────────────────────────────────────────────────
+  const handlePhoto=(e)=>{
+    const f=e.target.files[0];if(!f) return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const c=document.createElement('canvas');const W=500;const sc=W/img.width;
+        c.width=W;c.height=img.height*sc;c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        updateField('printingDesignPhoto',c.toDataURL('image/jpeg',0.65));
+      };img.src=ev.target.result;
+    };r.readAsDataURL(f);
+  };
+
+  // ── CSV EXPORT ───────────────────────────────────────────────────────────────
+  const exportCSV=()=>{
+    const h=Object.keys(formData).filter(k=>!k.startsWith('sign_')&&k!=='printingDesignPhoto');
+    const row=h.map(k=>{const v=formData[k];return(v===''||v==null)?'NA':`"${v}"`;});
+    const uri="data:text/csv;charset=utf-8,"+h.join(",")+"\n"+row.join(",");
+    const a=document.createElement("a");a.setAttribute("href",encodeURI(uri));a.setAttribute("download",`Sample_${activeSampleId}.csv`);
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+  };
+
+  // ── FINAL SUBMIT (ADMIN ONLY) ────────────────────────────────────────────────
+  const doFinalSubmit=()=>{
+    setSubmitting(true);setStatus('Compiling PDF...');
+    const final={...formData,isSubmitted:true};setFormData(final);
+    setTimeout(async()=>{
+      try{
+        const wrap=document.getElementById('printable-multipage-area');wrap.style.display='block';
+        const pdf=new jspdf.jsPDF('p','mm','a4');
+        const pw=pdf.internal.pageSize.getWidth();const ph=pdf.internal.pageSize.getHeight();
+        const c1=await html2canvas(document.getElementById('pdf-page-1'),{scale:1.5,useCORS:true,logging:false});
+        pdf.addImage(c1.toDataURL('image/jpeg',0.75),'JPEG',0,0,pw,ph);
+        pdf.addPage();
+        const c2=await html2canvas(document.getElementById('pdf-page-2'),{scale:1.5,useCORS:true,logging:false});
+        pdf.addImage(c2.toDataURL('image/jpeg',0.75),'JPEG',0,0,pw,ph);
+        pdf.save(`Sample_Lot_${formData.sampleNo}.pdf`);
+        wrap.style.display='none';
+        const b64=pdf.output('datauristring').split(',')[1];
+        const payload={...final,isSubmitted:true,pdfBlobBase64:b64,action:'finalSubmit'};
+        let driveUrl="";
+        if(isOnline){
+          try{const r=await fetch(GOOGLE_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});if(r.ok){const rj=await r.json();if(rj.status==='success')driveUrl=rj.fileUrl||"";}}
+          catch(fe){await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify(payload)});}
+        }
+        const local={...final,pdfDriveUrl:driveUrl||"Saved in Sarv India PDF Lots Folder"};
+        setFormData(local);localStorage.setItem(`sarv_sample_${activeSampleId}`,JSON.stringify(local));
+        setStatus('✅ Submitted! Sheet & Drive updated.');
+        showAlert("✅ PDF downloaded & data saved to Google Sheet!","success");
+        setAppMode('menu');
+      }catch(e){console.error(e);setStatus('Error during submit.');showAlert("Error during submit. Try again.","warning");}
+      finally{setSubmitting(false);}
+    },500);
+  };
+
+  const clearCache=()=>{
+    localStorage.removeItem('sarv_samples_list');localStorage.removeItem('sarv_deleted_samples');
+    for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k&&k.startsWith('sarv_sample_'))localStorage.removeItem(k);}
+    fetchDirectory(appMode==='submitted-list'?'submitted':'incomplete');
+    showAlert("Cache cleared! Fresh sync se data load hoga.","success");
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER SCREENS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // SPLASH
+  if(splash) return(
+    <div className="min-h-screen bg-blue-900 flex flex-col items-center justify-center">
+      <div className="text-center animate-pulse">
+        <p className="text-5xl mb-4">🏭</p>
+        <h1 className="text-3xl font-black text-white tracking-widest">SARV INDIA</h1>
+        <p className="text-blue-300 text-xs tracking-widest mt-1 uppercase">Production Sample System</p>
+      </div>
+    </div>
+  );
+
+  // LOGIN
+  if(!currentUser) return(
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-800 flex items-center justify-center p-4">
+      <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-blue-100">
+        <div className="text-center mb-6">
+          <div className="text-4xl mb-2">🏭</div>
+          <h1 className="text-xl font-black text-blue-900">SARV INDIA</h1>
+          <p className="text-[10px] text-gray-400 uppercase tracking-widest">Production Sample System</p>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] font-black text-gray-600 uppercase">Username</label>
+            <input type="text" value={loginUser} onChange={e=>setLoginUser(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleLogin()}
+              placeholder="Enter username" autoCapitalize="none"
+              className="w-full mt-1 p-3 border-2 border-gray-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500"/>
+          </div>
+          <div>
+            <label className="text-[10px] font-black text-gray-600 uppercase">Password</label>
+            <input type="password" value={loginPass} onChange={e=>setLoginPass(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleLogin()}
+              placeholder="Enter password"
+              className="w-full mt-1 p-3 border-2 border-gray-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500"/>
+          </div>
+          {loginError&&<p className="text-red-500 text-xs font-bold text-center bg-red-50 p-2 rounded-lg">{loginError}</p>}
+          <button onClick={handleLogin} disabled={loginLoading}
+            className="w-full bg-blue-700 hover:bg-blue-800 text-white font-black py-3.5 rounded-xl text-sm shadow-lg active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2">
+            {loginLoading?<><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>Verifying...</>:<>🔐 Login to System</>}
+          </button>
+        </div>
+        <div className="mt-5 pt-4 border-t text-center">
+          <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${isOnline?'text-green-600':'text-red-500'}`}>
+            <span className={`w-2 h-2 rounded-full ${isOnline?'bg-green-500':'bg-red-500'} pulse-sync-active`}></span>
+            {isOnline?"Server Connected":"Offline Mode"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+
+  // MENU
+  if(appMode==='menu') return(
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-sm border border-gray-200">
+        <div className="text-center mb-1">
+          <h1 className="text-2xl font-black text-blue-900 font-serif">SARV INDIA</h1>
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Mobile Sample System</p>
+        </div>
+        <div className={`mt-3 mb-5 px-3 py-2.5 rounded-xl text-white text-center ${ROLE_COLORS[currentUser.role]||'bg-gray-700'}`}>
+          <p className="text-[10px] font-bold opacity-80 uppercase">Logged in as</p>
+          <p className="text-sm font-black">{currentUser.displayName}</p>
+          <p className="text-[10px] opacity-70">{ROLE_LABELS[currentUser.role]||currentUser.role}</p>
+        </div>
+        <div className="space-y-3">
+          {currentUser.role==='ADMIN'&&(
+            <button onClick={()=>{setSampleNoInput('');setAppMode('new');}}
+              className="w-full flex items-center justify-between bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-5 rounded-xl shadow active:scale-95">
+              <div className="flex items-center text-left">
+                <span className="text-xl mr-2.5">➕</span>
+                <div><p className="text-xs font-bold">1. NEW SAMPLE ENTRY</p><p className="text-[9px] text-blue-200">Start new production lot</p></div>
+              </div><span>➔</span>
+            </button>
+          )}
+          <button onClick={()=>{setAppMode('resume-list');fetchDirectory('incomplete');}}
+            className="w-full flex items-center justify-between bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3.5 px-5 rounded-xl shadow active:scale-95">
+            <div className="flex items-center text-left">
+              <span className="text-xl mr-2.5">📂</span>
+              <div><p className="text-xs font-bold">OPEN ACTIVE LOTS</p><p className="text-[9px] text-yellow-100">Fetch & fill your section</p></div>
+            </div><span>➔</span>
+          </button>
+          <button onClick={()=>{setAppMode('submitted-list');fetchDirectory('submitted');}}
+            className="w-full flex items-center justify-between bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-5 rounded-xl shadow active:scale-95">
+            <div className="flex items-center text-left">
+              <span className="text-xl mr-2.5">📋</span>
+              <div><p className="text-xs font-bold">VIEW SUBMITTED LOTS</p><p className="text-[9px] text-emerald-100">Review finalized records</p></div>
+            </div><span>➔</span>
+          </button>
+        </div>
+        <div className="mt-5 pt-4 border-t flex items-center justify-between">
+          <span className={`flex items-center gap-1.5 text-[10px] font-bold ${isOnline?'text-green-600':'text-red-500'}`}>
+            <span className={`w-2 h-2 rounded-full ${isOnline?'bg-green-500':'bg-red-500'} pulse-sync-active`}></span>
+            {isOnline?"Online":"Offline"}
+          </span>
+          <button onClick={handleLogout} className="text-[10px] font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg">🚪 Logout</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // NEW SAMPLE (admin only)
+  if(appMode==='new') return(
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-sm border border-gray-200">
+        <button onClick={()=>setAppMode('menu')} className="text-gray-500 flex items-center mb-5 font-bold text-xs">← Back</button>
+        <h2 className="text-lg font-extrabold text-blue-900 mb-1">New Sample Registration</h2>
+        <p className="text-[10px] text-gray-500 mb-5">Unique Sample No assign karein (Admin only).</p>
+        <input type="text" className="w-full p-3 border rounded-lg font-bold text-center text-lg uppercase outline-none focus:border-blue-500"
+          placeholder="e.g. SAMP-01" value={sampleNoInput} onChange={e=>setSampleNoInput(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&handleNewSample()}/>
+        <button onClick={handleNewSample} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg mt-4 text-xs tracking-wider active:scale-95">
+          Register Lot ➔
+        </button>
+      </div>
+    </div>
+  );
+
+  // SAMPLE LISTS (resume / submitted)
+  if(appMode==='resume-list'||appMode==='submitted-list'){
+    const isSub=appMode==='submitted-list';
+    return(
+      <div className="min-h-screen bg-gray-50 pb-12 w-full">
+        <div className={`${isSub?'bg-emerald-800':'bg-yellow-600'} text-white p-4 sticky top-0 z-10 flex items-center justify-between shadow`}>
+          <button onClick={()=>setAppMode('menu')} className="text-white font-bold text-xs">← Menu</button>
+          <h1 className="font-bold text-xs uppercase">{isSub?'Submitted Lots':'Active Lots'}</h1>
+          <div className="w-8"></div>
+        </div>
+        <div className="max-w-md mx-auto p-3 space-y-3">
+          <div className={`${ROLE_COLORS[currentUser.role]||'bg-gray-700'} text-white rounded-xl p-3 text-[11px]`}>
+            <span className="font-black">👤 {currentUser.displayName}</span>
+            <span className="ml-2 opacity-80">— {ROLE_LABELS[currentUser.role]}</span>
+            <p className="mt-0.5 opacity-70 text-[10px]">{currentUser.role==='ADMIN'?'Full access to all sections':'Only your section fields are editable'}</p>
+          </div>
+          {currentUser.role==='ADMIN'&&(
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 flex items-center justify-between text-[11px]">
+              <span className="font-extrabold text-yellow-800">⚠️ Cache Sync</span>
+              <button onClick={clearCache} className="bg-red-600 text-white font-extrabold text-[10px] py-1.5 px-3 rounded-lg">⚡ Force Clear Cache</button>
+            </div>
+          )}
+          <div className="flex justify-between items-center">
+            <h2 className="font-bold text-xs text-gray-700 uppercase">{isSub?'Finalized Cards':'Select Lot to Open'}</h2>
+            <button onClick={()=>fetchDirectory(isSub?'submitted':'incomplete')}
+              className={`${isSub?'bg-emerald-700':'bg-yellow-700'} text-[10px] text-white font-bold px-3 py-1 rounded shadow`}>🔄 Refresh</button>
+          </div>
+          {samplesList.length===0&&(
+            <div className="text-center py-10 bg-white border border-dashed rounded-xl">
+              <span className="text-3xl">📭</span>
+              <p className="mt-2 text-gray-400 font-bold text-xs">No records found.</p>
+            </div>
+          )}
+          {samplesList.map(s=>(
+            <div key={s.sampleNo} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+              <div>
+                <p className={`font-black text-sm ${isSub?'text-emerald-800':'text-yellow-800'}`}>{s.sampleNo}</p>
+                <p className="text-[10px] text-gray-500">Lot: {s.lotNo||'NA'} | Quality: {s.quality||'NA'}</p>
+                {s.lastSyncedBy&&<p className="text-[9px] text-gray-400">By: {s.lastSyncedBy}</p>}
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={async()=>{setActiveSampleId(s.sampleNo);setAppMode('form');await loadSample(s.sampleNo);}}
+                  className={`${isSub?'bg-emerald-100 text-emerald-800':'bg-yellow-100 text-yellow-800'} text-[10px] font-bold py-1.5 px-3 rounded-lg`}>
+                  {isSub?'View ➔':'Open ➔'}
+                </button>
+                {currentUser.role==='ADMIN'&&(
+                  <button onClick={()=>openAdminModal('delete',s.sampleNo)}
+                    className="bg-red-50 text-red-600 text-[10px] font-bold py-1.5 px-3 rounded-lg">Delete</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MAIN FORM SCREEN
+  // ═══════════════════════════════════════════════════════════════════════════
+  return(
+    <div className="min-h-screen bg-gray-50 pb-24 w-full overflow-x-hidden">
+
+      {/* HUD */}
+      <div className="bg-blue-800 text-white p-3 sticky top-0 z-10 shadow-md">
+        <div className="flex justify-between items-center max-w-4xl mx-auto">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${cloudSyncing?'bg-yellow-400':isOnline?'bg-green-400':'bg-red-400'} pulse-sync-active`}></span>
+            <div>
+              <h1 className="text-sm font-black">SARV INDIA</h1>
+              <p className="text-[10px] text-blue-200">Sample: {activeSampleId}</p>
+            </div>
+          </div>
+          <div className="flex gap-1.5 items-center">
+            <span className={`text-[9px] font-black px-2 py-1 rounded text-white ${ROLE_COLORS[currentUser.role]||'bg-gray-700'}`}>{currentUser.role}</span>
+            <button onClick={exportCSV} className="bg-green-600 p-1.5 rounded-lg text-[10px] font-bold">💾 CSV</button>
+            <button onClick={()=>setAppMode('menu')} className="bg-gray-700 p-1.5 rounded-lg text-[10px] font-bold">🏠</button>
+          </div>
+        </div>
+      </div>
+
+      {/* STATUS BAR */}
+      <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-[10px] text-center p-1.5 font-extrabold flex justify-center items-center gap-1">
+        <span>👤 {currentUser.displayName}</span>
+        <span className="mx-1 text-gray-300">|</span>
+        <span>☁️ {status}</span>
+        {fetchingForm&&<span className="animate-spin ml-1">⏳</span>}
+      </div>
+
+      {/* ROLE ACCESS BANNER */}
+      {currentUser.role!=='ADMIN'&&(
+        <div className={`${ROLE_COLORS[currentUser.role]||'bg-gray-700'} text-white text-[10px] text-center p-1.5 font-bold`}>
+          ✏️ Editable section: <strong>{ROLE_LABELS[currentUser.role]}</strong> | Baaki sections read-only hain
+        </div>
+      )}
+
+      <div className="max-w-md mx-auto p-2.5 sm:p-4">
+
+        {/* SECTION 1: WEAVING */}
+        <Section title="WEAVING DATA BY RASCHEL MASTER" defaultOpen={true} isSectionLocked={isWeavingLocked}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Input label="Sample No (Read Only)" value={formData.sampleNo} readOnly={true}/>
+            <Input label="Lot No" value={formData.lotNo} onChange={v=>updateField('lotNo',v)} onBlurSync={()=>triggerSync()} noAccess={fe('lotNo')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Quality Code" value={formData.quality} onChange={v=>updateField('quality',v)} onBlurSync={()=>triggerSync()} noAccess={fe('quality')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Bed Size" type="select" options={['DOUBLE','SINGLE']} value={formData.bedSize} onChange={v=>updateField('bedSize',v)} noAccess={fe('bedSize')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Blanket Ply" type="select" options={['SINGLE PLY','DOUBLE PLY']} value={formData.blanketPly} onChange={v=>updateField('blanketPly',v)} noAccess={fe('blanketPly')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Required Blanket Weight" value={formData.reqBlanketPcsWeightWithoutEverything} onChange={v=>updateField('reqBlanketPcsWeightWithoutEverything',v)} onBlurSync={()=>triggerSync()} noAccess={fe('reqBlanketPcsWeightWithoutEverything')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Guage" value={formData.raschelGuage} onChange={v=>updateField('raschelGuage',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelGuage')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Pyle Height" value={formData.raschelPyleHeight} onChange={v=>updateField('raschelPyleHeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelPyleHeight')} isSectionLocked={isWeavingLocked}/>
+            <Input label="PC PO Denier" value={formData.pcPoDenier} onChange={v=>updateField('pcPoDenier',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcPoDenier')} isSectionLocked={isWeavingLocked}/>
+            <Input label="PC PO Ends" value={formData.pcPoEnds} onChange={v=>updateField('pcPoEnds',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcPoEnds')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Micro Denier" value={formData.microDenier} onChange={v=>updateField('microDenier',v)} onBlurSync={()=>triggerSync()} noAccess={fe('microDenier')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Micro Ends" value={formData.microEnds} onChange={v=>updateField('microEnds',v)} onBlurSync={()=>triggerSync()} noAccess={fe('microEnds')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Roll Weight" value={formData.raschelRollWeight} onChange={v=>updateField('raschelRollWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelRollWeight')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Pcs Weight Required" value={formData.pcsWeightRequired} onChange={v=>updateField('pcsWeightRequired',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcsWeightRequired')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Width" value={formData.raschelWidth} onChange={v=>updateField('raschelWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelWidth')} isSectionLocked={isWeavingLocked}/>
+            <Input label="After Raschel Size" value={formData.afterRaschelSize} onChange={v=>updateField('afterRaschelSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterRaschelSize')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Roll Length" value={formData.raschelRollLength} onChange={v=>updateField('raschelRollLength',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelRollLength')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Total No of Roll" value={formData.totalNoOfRoll} onChange={v=>updateField('totalNoOfRoll',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalNoOfRoll')} isSectionLocked={isWeavingLocked}/>
+          </div>
+          <SignaturePad title="Signature: Raschel Master" value={formData.sign_weavingRaschelMaster} onChange={v=>updateField('sign_weavingRaschelMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_weavingRaschelMaster')} noAccess={fe('sign_weavingRaschelMaster')} isSectionLocked={isWeavingLocked}/>
+        </Section>
+
+        {/* SECTION 2: SLITTING */}
+        <Section title="SLITTING DATA BY SLITTING MASTER" isSectionLocked={isSlittingLocked}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Input label="Slitting Speed" value={formData.slittingSpeed} onChange={v=>updateField('slittingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('slittingSpeed')} isSectionLocked={isSlittingLocked}/>
+            <Input label="After Slitting Size" value={formData.afterSlittingSize} onChange={v=>updateField('afterSlittingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterSlittingSize')} isSectionLocked={isSlittingLocked}/>
+            <Input label="After Slitting Magnet" value={formData.afterSlittingMagnet} onChange={v=>updateField('afterSlittingMagnet',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterSlittingMagnet')} isSectionLocked={isSlittingLocked}/>
+            <Input label="Mending Check" value={formData.mendingCheck} onChange={v=>updateField('mendingCheck',v)} onBlurSync={()=>triggerSync()} noAccess={fe('mendingCheck')} isSectionLocked={isSlittingLocked}/>
+          </div>
+          <SignaturePad title="Signature: Slitting Master" value={formData.sign_slittingRaschelMaster} onChange={v=>updateField('sign_slittingRaschelMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_slittingRaschelMaster')} noAccess={fe('sign_slittingRaschelMaster')} isSectionLocked={isSlittingLocked}/>
+        </Section>
+
+        {/* SECTION 3: STENTER 1 */}
+        <Section title="STENTER DATA BY STENTER MASTER" isSectionLocked={isStenter1Locked}>
+          <Input label="Stenter Process (YES/NO)" type="select" options={['NO','YES']} value={formData.stenterYesNo} onChange={v=>updateField('stenterYesNo',v)} noAccess={fe('stenterYesNo')} isSectionLocked={isStenter1Locked}/>
+          {formData.stenterYesNo==='YES'&&(
+            <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+              <Input label="Before Stenter Width" value={formData.beforeStenterWidth} onChange={v=>updateField('beforeStenterWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('beforeStenterWidth')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Stenter Temp" value={formData.stenterTemp} onChange={v=>updateField('stenterTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterTemp')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Top Blower Speed" value={formData.topBlowerSpeed} onChange={v=>updateField('topBlowerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('topBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed} onChange={v=>updateField('bottomBlowerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bottomBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Stenter Speed" value={formData.stenterSpeed} onChange={v=>updateField('stenterSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="After Stenter Size" value={formData.afterStenterSize} onChange={v=>updateField('afterStenterSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterStenterSize')} isSectionLocked={isStenter1Locked}/>
+            </div>
+          )}
+          <SignaturePad title="Signature: Stenter Master" value={formData.sign_stenterMaster1} onChange={v=>updateField('sign_stenterMaster1',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_stenterMaster1')} noAccess={fe('sign_stenterMaster1')} isSectionLocked={isStenter1Locked}/>
+        </Section>
+
+        {/* SECTION 4: GREY POLISH */}
+        <Section title="GREY POLISH DATA BY GREY POLISH MASTER" isSectionLocked={isGreyPolishLocked}>
+          <Input label="Polish Before Brushing" type="select" options={['NO','YES']} value={formData.polishBeforeBrushingYesNo} onChange={v=>updateField('polishBeforeBrushingYesNo',v)} noAccess={fe('polishBeforeBrushingYesNo')} isSectionLocked={isGreyPolishLocked}/>
+          {formData.polishBeforeBrushingYesNo==='YES'&&(
+            <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+              <Input label="Polish Speed" value={formData.polishSpeed} onChange={v=>updateField('polishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polishSpeed')} isSectionLocked={isGreyPolishLocked}/>
+              <Input label="Polish Temp" value={formData.polishTemp} onChange={v=>updateField('polishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polishTemp')} isSectionLocked={isGreyPolishLocked}/>
+              <Input label="Table Brushing Speed" value={formData.tableBrushingSpeed} onChange={v=>updateField('tableBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('tableBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
+            </div>
+          )}
+          <div className="mt-3">
+            <Input label="High Speed Brushing" type="select" options={['NO','YES']} value={formData.highSpeedBrushingYesNo} onChange={v=>updateField('highSpeedBrushingYesNo',v)} noAccess={fe('highSpeedBrushingYesNo')} isSectionLocked={isGreyPolishLocked}/>
+            {formData.highSpeedBrushingYesNo==='YES'&&(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+                <Input label="High Speed Brushing Speed" value={formData.highSpeedBrushingSpeed} onChange={v=>updateField('highSpeedBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('highSpeedBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
+                <Input label="After High Speed Size" value={formData.afterHighSpeedBrushingSize} onChange={v=>updateField('afterHighSpeedBrushingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterHighSpeedBrushingSize')} isSectionLocked={isGreyPolishLocked}/>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 mt-3">
+            <Input label="Polish Machines Used" value={formData.howManyPolishMachineUsed} onChange={v=>updateField('howManyPolishMachineUsed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolishMachineUsed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Cylinders Used" value={formData.howManyCylinderUsed} onChange={v=>updateField('howManyCylinderUsed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyCylinderUsed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Grey Polish Speed" value={formData.greyPolishSpeed} onChange={v=>updateField('greyPolishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('greyPolishSpeed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Grey Polish Temp" value={formData.greyPolishTemp} onChange={v=>updateField('greyPolishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('greyPolishTemp')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="After Grey Polish Size" value={formData.afterGreyPolishSize} onChange={v=>updateField('afterGreyPolishSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterGreyPolishSize')} isSectionLocked={isGreyPolishLocked}/>
+          </div>
+          <SignaturePad title="Signature: Grey Polish Master" value={formData.sign_greyPolishMaster} onChange={v=>updateField('sign_greyPolishMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_greyPolishMaster')} noAccess={fe('sign_greyPolishMaster')} isSectionLocked={isGreyPolishLocked}/>
+        </Section>
+
+        {/* SECTION 5: PRINTING */}
+        <Section title="PRINTING DATA BY PRINTING MASTER" isSectionLocked={isPrintingLocked}>
+          <div className="mb-3">
+            <label className="block text-xs font-bold text-gray-700 mb-1">Design Photo</label>
+            <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={fe('printingDesignPhoto')||isPrintingLocked} className="w-full text-xs mb-1.5"/>
+            {formData.printingDesignPhoto&&<img src={formData.printingDesignPhoto} alt="Design" className="h-28 object-contain border rounded-lg mt-2"/>}
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Input label="Chemical/Gum/Thickner" value={formData.printingChemical} onChange={v=>updateField('printingChemical',v)} onBlurSync={()=>triggerSync()} noAccess={fe('printingChemical')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Printing Repeat" value={formData.printingRepeat} onChange={v=>updateField('printingRepeat',v)} onBlurSync={()=>triggerSync()} noAccess={fe('printingRepeat')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Azer Holding Time" value={formData.azerHoldingTime} onChange={v=>updateField('azerHoldingTime',v)} onBlurSync={()=>triggerSync()} noAccess={fe('azerHoldingTime')} isSectionLocked={isPrintingLocked}/>
+            <Input label="After Azer Size" value={formData.afterAzerSize} onChange={v=>updateField('afterAzerSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterAzerSize')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Chemical" value={formData.washingChemical} onChange={v=>updateField('washingChemical',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingChemical')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Temp" value={formData.washingTemp} onChange={v=>updateField('washingTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingTemp')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Speed" value={formData.washingSpeed} onChange={v=>updateField('washingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingSpeed')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Hydro" value={formData.hydro} onChange={v=>updateField('hydro',v)} onBlurSync={()=>triggerSync()} noAccess={fe('hydro')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Caustic" value={formData.caustic} onChange={v=>updateField('caustic',v)} onBlurSync={()=>triggerSync()} noAccess={fe('caustic')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Soaping" value={formData.soaping} onChange={v=>updateField('soaping',v)} onBlurSync={()=>triggerSync()} noAccess={fe('soaping')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Silicon 1" value={formData.silicon1} onChange={v=>updateField('silicon1',v)} onBlurSync={()=>triggerSync()} noAccess={fe('silicon1')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Silicon 2" value={formData.silicon2} onChange={v=>updateField('silicon2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('silicon2')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Bouncing" value={formData.bouncing} onChange={v=>updateField('bouncing',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bouncing')} isSectionLocked={isPrintingLocked}/>
+            <Input label="After Washing Size" value={formData.afterWashingSize} onChange={v=>updateField('afterWashingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterWashingSize')} isSectionLocked={isPrintingLocked}/>
+          </div>
+          <div className="mt-3 border-t pt-3">
+            <Input label="Dryer Process" type="select" options={['DRYER','STENTER']} value={formData.dryerProcess} onChange={v=>updateField('dryerProcess',v)} noAccess={fe('dryerProcess')} isSectionLocked={isPrintingLocked}/>
+            {formData.dryerProcess==='STENTER'?(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="col-span-2 text-[10px] font-bold text-blue-800">&gt; STENTER DATA (PROCESS 2)</p>
+                <Input label="Stenter Speed" value={formData.stenterSpeed2} onChange={v=>updateField('stenterSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Stenter Temp" value={formData.stenterTemp2} onChange={v=>updateField('stenterTemp2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterTemp2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Top Blower Speed" value={formData.topBlowerSpeed2} onChange={v=>updateField('topBlowerSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('topBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed2} onChange={v=>updateField('bottomBlowerSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bottomBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="After Stenter Size" value={formData.afterStenterSize2} onChange={v=>updateField('afterStenterSize2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterStenterSize2')} isSectionLocked={isStenter2Locked}/>
+              </div>
+            ):(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-orange-50 border border-orange-200 rounded-lg">
+                <Input label="Dryer Speed" value={formData.dryerSpeed} onChange={v=>updateField('dryerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('dryerSpeed')} isSectionLocked={isPrintingLocked}/>
+                <Input label="Dryer Temp" value={formData.dryerTemp} onChange={v=>updateField('dryerTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('dryerTemp')} isSectionLocked={isPrintingLocked}/>
+                <Input label="After Dryer Size" value={formData.afterDryerSize} onChange={v=>updateField('afterDryerSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterDryerSize')} isSectionLocked={isPrintingLocked}/>
+              </div>
+            )}
+          </div>
+          <SignaturePad title="Signature: Printing Master" value={formData.sign_printingMaster} onChange={v=>updateField('sign_printingMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_printingMaster')} noAccess={fe('sign_printingMaster')} isSectionLocked={isPrintingLocked}/>
+          {formData.dryerProcess==='STENTER'&&(
+            <SignaturePad title="Signature: Stenter Master (Process 2)" value={formData.sign_stenterMaster2} onChange={v=>updateField('sign_stenterMaster2',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_stenterMaster2')} noAccess={fe('sign_stenterMaster2')} isSectionLocked={isStenter2Locked}/>
+          )}
+        </Section>
+
+        {/* SECTION 6: FINISHING */}
+        <Section title="FINISHING DATA BY FINISHING MASTER" isSectionLocked={isFinishingLocked}>
+          <Input label="Polish Before Brushing" type="select" options={['NO','YES']} value={formData.finishPolishBeforeBrushingYesNo} onChange={v=>updateField('finishPolishBeforeBrushingYesNo',v)} noAccess={fe('finishPolishBeforeBrushingYesNo')} isSectionLocked={isFinishingLocked}/>
+          {formData.finishPolishBeforeBrushingYesNo==='YES'&&(
+            <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+              <Input label="Polish Speed" value={formData.finishPolishSpeed} onChange={v=>updateField('finishPolishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishPolishSpeed')} isSectionLocked={isFinishingLocked}/>
+              <Input label="Polish Temp" value={formData.finishPolishTemp} onChange={v=>updateField('finishPolishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishPolishTemp')} isSectionLocked={isFinishingLocked}/>
+              <Input label="After Polish Size" value={formData.afterPolishSize} onChange={v=>updateField('afterPolishSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterPolishSize')} isSectionLocked={isFinishingLocked}/>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2.5 mt-3">
+            <Input label="Table Brushing Speed" value={formData.finishTableBrushingSpeed} onChange={v=>updateField('finishTableBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishTableBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
+            <Input label="After Brushing Size" value={formData.afterBrushingSize} onChange={v=>updateField('afterBrushingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterBrushingSize')} isSectionLocked={isFinishingLocked}/>
+          </div>
+          <div className="mt-3">
+            <Input label="High Speed Brushing" type="select" options={['NO','YES']} value={formData.finishHighSpeedBrushingYesNo} onChange={v=>updateField('finishHighSpeedBrushingYesNo',v)} noAccess={fe('finishHighSpeedBrushingYesNo')} isSectionLocked={isFinishingLocked}/>
+            {formData.finishHighSpeedBrushingYesNo==='YES'&&(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+                <Input label="High Speed Brushing Speed" value={formData.finishHighSpeedBrushingSpeed} onChange={v=>updateField('finishHighSpeedBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishHighSpeedBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
+                <Input label="After High Speed Size" value={formData.afterHighSpeedSize} onChange={v=>updateField('afterHighSpeedSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterHighSpeedSize')} isSectionLocked={isFinishingLocked}/>
+              </div>
+            )}
+          </div>
+          <div className="mt-3 border-t pt-3">
+            <Input label="Raising" type="select" options={['NO','YES']} value={formData.raisingYesNo} onChange={v=>updateField('raisingYesNo',v)} noAccess={fe('raisingYesNo')} isSectionLocked={isFinishingLocked}/>
+            {formData.raisingYesNo==='YES'&&(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+                <Input label="Raising Machines" value={formData.howManyRaisingMachine} onChange={v=>updateField('howManyRaisingMachine',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyRaisingMachine')} isSectionLocked={isFinishingLocked}/>
+                <Input label="% Raising" value={formData.percentRaising} onChange={v=>updateField('percentRaising',v)} onBlurSync={()=>triggerSync()} noAccess={fe('percentRaising')} isSectionLocked={isFinishingLocked}/>
+                <Input label="After Raising Size" value={formData.afterRaisingSize} onChange={v=>updateField('afterRaisingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterRaisingSize')} isSectionLocked={isFinishingLocked}/>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 mt-3 border-t pt-3">
+            <Input label="Polishers Final" value={formData.howManyPolisherFinal} onChange={v=>updateField('howManyPolisherFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolisherFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polycuts Final" value={formData.howManyPolycutFinal} onChange={v=>updateField('howManyPolycutFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolycutFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polisher Speed" value={formData.polisherSpeedFinal} onChange={v=>updateField('polisherSpeedFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polisherSpeedFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polisher Temp" value={formData.polisherTempFinal} onChange={v=>updateField('polisherTempFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polisherTempFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="After Polisher Size" value={formData.afterFinalPolisherSize} onChange={v=>updateField('afterFinalPolisherSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterFinalPolisherSize')} isSectionLocked={isFinishingLocked}/>
+          </div>
+          <div className="mt-3 border-t pt-3">
+            <Input label="Emboss" type="select" options={['NO','YES']} value={formData.embossYesNo} onChange={v=>updateField('embossYesNo',v)} noAccess={fe('embossYesNo')} isSectionLocked={isFinishingLocked}/>
+            {formData.embossYesNo==='YES'&&(
+              <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
+                <Input label="Temp of Emboss" value={formData.tempOfEmboss} onChange={v=>updateField('tempOfEmboss',v)} onBlurSync={()=>triggerSync()} noAccess={fe('tempOfEmboss')} isSectionLocked={isFinishingLocked}/>
+                <Input label="Holding Time of Emboss" value={formData.holdingTimeOfEmboss} onChange={v=>updateField('holdingTimeOfEmboss',v)} onBlurSync={()=>triggerSync()} noAccess={fe('holdingTimeOfEmboss')} isSectionLocked={isFinishingLocked}/>
+              </div>
+            )}
+          </div>
+          <SignaturePad title="Signature: Finishing Master" value={formData.sign_finishingMaster} onChange={v=>updateField('sign_finishingMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_finishingMaster')} noAccess={fe('sign_finishingMaster')} isSectionLocked={isFinishingLocked}/>
+        </Section>
+
+        {/* SECTION 7: PACKING */}
+        <Section title="PACKING DATA BY PACKING CONTRACTOR" isSectionLocked={isPackingLocked}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Input label="Total Pcs" value={formData.totalPcs} onChange={v=>updateField('totalPcs',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalPcs')} isSectionLocked={isPackingLocked}/>
+            <Input label="Average Pcs Length" value={formData.averagePcsLength} onChange={v=>updateField('averagePcsLength',v)} onBlurSync={()=>triggerSync()} noAccess={fe('averagePcsLength')} isSectionLocked={isPackingLocked}/>
+            <Input label="Average Pcs Width" value={formData.averagePcsWidth} onChange={v=>updateField('averagePcsWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('averagePcsWidth')} isSectionLocked={isPackingLocked}/>
+            <Input label="Avg Pcs Weight" value={formData.avgPcsWeight} onChange={v=>updateField('avgPcsWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('avgPcsWeight')} isSectionLocked={isPackingLocked}/>
+            <Input label="Total Waste Weight" value={formData.totalWasteWeight} onChange={v=>updateField('totalWasteWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalWasteWeight')} isSectionLocked={isPackingLocked}/>
+            <Input label="Label" value={formData.label} onChange={v=>updateField('label',v)} onBlurSync={()=>triggerSync()} noAccess={fe('label')} isSectionLocked={isPackingLocked}/>
+          </div>
+          <SignaturePad title="Signature: Packing Contractor" value={formData.sign_packingContractor} onChange={v=>updateField('sign_packingContractor',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_packingContractor')} noAccess={fe('sign_packingContractor')} isSectionLocked={isPackingLocked}/>
+        </Section>
+
+        {/* SECTION 8: QC & APPROVALS */}
+        <Section title="MANDATORY CHECKS & APPROVALS" defaultOpen={true}>
+          <div className="space-y-3">
+            <SignaturePad title="Checked By: RASCHEL MASTER" value={formData.sign_checkedRaschel} onChange={v=>updateField('sign_checkedRaschel',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_checkedRaschel')} noAccess={fe('sign_checkedRaschel')}/>
+            <SignaturePad title="Checked By: GREY POLISH MASTER" value={formData.sign_checkedGreyPolish} onChange={v=>updateField('sign_checkedGreyPolish',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_checkedGreyPolish')} noAccess={fe('sign_checkedGreyPolish')}/>
+            <SignaturePad title="Checked By: PRINTING MASTER" value={formData.sign_checkedPrinting} onChange={v=>updateField('sign_checkedPrinting',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_checkedPrinting')} noAccess={fe('sign_checkedPrinting')}/>
+            <SignaturePad title="Checked By: FINISHING MASTER" value={formData.sign_checkedFinishing} onChange={v=>updateField('sign_checkedFinishing',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_checkedFinishing')} noAccess={fe('sign_checkedFinishing')}/>
+            <SignaturePad title="Checked By: GM" value={formData.sign_checkedGM} onChange={v=>updateField('sign_checkedGM',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_checkedGM')} noAccess={fe('sign_checkedGM')}/>
+            <div className="border-t-2 pt-4 border-gray-300">
+              <Input label="SAMPLE APPROVED BY MD" type="select" options={['YES','NO']} value={formData.sampleApprovedYesNo} onChange={v=>updateField('sampleApprovedYesNo',v)} noAccess={fe('sampleApprovedYesNo')}/>
+              <SignaturePad title="Approved By: MD" value={formData.sign_approvedMD} onChange={v=>updateField('sign_approvedMD',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_approvedMD')} noAccess={fe('sign_approvedMD')}/>
+            </div>
+          </div>
+        </Section>
+
+        {/* SAVE BUTTON (non-admin) */}
+        {currentUser.role!=='ADMIN'&&(
+          <div className="mt-4 mb-4">
+            <button onClick={()=>triggerSync()} disabled={cloudSyncing}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow flex items-center justify-center gap-2 text-sm active:scale-95 disabled:opacity-50">
+              {cloudSyncing?<><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>Saving...</>:<>💾 Save My Section Data to Sheet</>}
+            </button>
+            <p className="text-[10px] text-gray-400 text-center mt-1">Sirf aapke section ke fields save honge</p>
+          </div>
+        )}
+
+        {/* FINAL SUBMIT (admin only) */}
+        {currentUser.role==='ADMIN'&&(
+          <div className="mt-8 mb-12">
+            {allSigsDone?(
+              <button onClick={()=>openAdminModal('final_submit')} disabled={submitting}
+                className="w-full bg-green-600 hover:bg-green-700 text-white text-base font-bold py-3.5 rounded-full shadow-lg flex items-center justify-center disabled:opacity-50 active:scale-95 animate-bounce">
+                {submitting?<><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></span>SYNCING...</>:"🚀 FINAL SUBMIT & SAVE TO DRIVE"}
+              </button>
+            ):(
+              <div className="bg-red-50 p-4 rounded-xl border border-red-200 text-center">
+                <p className="text-red-700 font-extrabold text-xs mb-2 uppercase">⚠️ Submit Locked — {pendingSigs.length} Signatures Pending</p>
+                <div className="bg-white p-3 rounded-lg border border-red-100 max-h-48 overflow-y-auto text-left space-y-1">
+                  {pendingSigs.map(s=><div key={s.key} className="flex items-center gap-1.5 text-[10px] text-gray-700 font-bold"><span className="text-red-500">❌</span>{s.name}</div>)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ADMIN MODAL */}
+      {showAdminModal&&(
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-5 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-200">
+            <div className="flex justify-center mb-3 text-blue-600 text-3xl">🔒</div>
+            <h2 className="text-base font-bold text-center mb-1 text-gray-800">Admin Verification Required</h2>
+            <p className="text-[10px] text-gray-400 text-center mb-3">
+              {adminAction==='clear_sig'?'Signature clear karne ke liye':adminAction==='delete'?`"${adminTarget}" delete karne ke liye`:'Final submit karne ke liye'} admin password daalen.
+            </p>
+            <input type="password" placeholder="Admin Password" value={adminPass} onChange={e=>setAdminPass(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&handleAdminVerify()}
+              className="w-full p-2.5 border-2 border-gray-300 rounded-xl mb-1 text-center text-lg tracking-widest focus:border-blue-500 outline-none font-bold"/>
+            {adminPassErr&&<p className="text-red-500 text-xs text-center mb-2 font-bold">{adminPassErr}</p>}
+            <div className="flex gap-2.5 mt-3">
+              <button onClick={()=>setShowAdminModal(false)} className="flex-1 bg-gray-200 text-gray-800 font-bold py-2 rounded-xl text-xs">Cancel</button>
+              <button onClick={handleAdminVerify} className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-xl text-xs">Verify & Proceed</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NOTIFICATION */}
+      {notif.show&&(
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-[110] p-4">
+          <div className="bg-white p-5 rounded-2xl shadow-2xl w-full max-w-xs text-center border border-gray-100">
+            <div className="text-3xl mb-2">{notif.type==='success'?'✅':notif.type==='warning'?'⚠️':'ℹ️'}</div>
+            <p className="text-sm font-bold text-gray-800 mb-4 whitespace-pre-wrap">{notif.msg}</p>
+            <button onClick={closeAlert} className="w-full bg-blue-600 text-white font-bold py-2 rounded-xl text-xs">OK</button>
+          </div>
+        </div>
+      )}
+
+      {/* PDF TEMPLATE (hidden) */}
+      <div id="printable-multipage-area" style={{display:'none',position:'absolute',left:'-9999px',top:'-9999px'}}>
+        <div id="pdf-page-1" className="printable-pdf-page">
+          <div style={{borderBottom:'3px solid #1e3a8a',paddingBottom:'8px',marginBottom:'14px',textAlign:'center'}}>
+            <h1 style={{color:'#1e3a8a',fontSize:'24px',margin:'0',fontWeight:'900',letterSpacing:'0.5px'}}>SARV INDIA HOME FURNISHING</h1>
+            <h2 style={{fontSize:'13px',color:'#475569',margin:'2px 0 0 0',fontWeight:'700',textTransform:'uppercase',letterSpacing:'1.5px'}}>Official Sample Production Lot Card (Page 1)</h2>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',marginBottom:'14px',fontSize:'11px'}}>
+            <tbody>
+              <tr>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',width:'18%',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Sample Number:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',width:'32%',fontWeight:'bold'}}>{getVal('sampleNo')}</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',width:'18%',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Lot Number:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',width:'32%',fontWeight:'bold'}}>{getVal('lotNo')}</td>
+              </tr>
+              <tr>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Quality Code:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px'}}>{getVal('quality')}</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Bed Size:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px'}}>{getVal('bedSize')}</td>
+              </tr>
+              <tr>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Blanket Ply:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px'}}>{getVal('blanketPly')}</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px',fontWeight:'bold',backgroundColor:'#f8fafc',color:'#1e3a8a'}}>Req. Blanket Weight:</td>
+                <td style={{border:'1px solid #cbd5e1',padding:'5px 8px'}}>{getVal('reqBlanketPcsWeightWithoutEverything')}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{border:'1px solid #1e3a8a',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#1e3a8a',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>1. WEAVING DATA BY RASCHEL MASTER</div>
+            <div style={{padding:'6px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px',fontSize:'9px'}}>
+              <div><strong>Raschel Guage:</strong> {getVal('raschelGuage')}</div><div><strong>Pyle Height:</strong> {getVal('raschelPyleHeight')}</div>
+              <div><strong>PC PO Denier:</strong> {getVal('pcPoDenier')}</div><div><strong>PC PO Ends:</strong> {getVal('pcPoEnds')}</div>
+              <div><strong>Micro Denier:</strong> {getVal('microDenier')}</div><div><strong>Micro Ends:</strong> {getVal('microEnds')}</div>
+              <div><strong>Roll Weight:</strong> {getVal('raschelRollWeight')}</div><div><strong>Pcs Weight Req:</strong> {getVal('pcsWeightRequired')}</div>
+              <div><strong>Width:</strong> {getVal('raschelWidth')}</div><div><strong>After Raschel Size:</strong> {getVal('afterRaschelSize')}</div>
+              <div><strong>Roll Length:</strong> {getVal('raschelRollLength')}</div><div><strong>Total Rolls:</strong> {getVal('totalNoOfRoll')}</div>
+            </div>
+            {formData.sign_weavingRaschelMaster&&formData.sign_weavingRaschelMaster!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_weavingRaschelMaster==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#1e3a8a',padding:'4px'}}>✓ VERIFIED DIGITAL SIGN (DONE)</div>:<img src={formData.sign_weavingRaschelMaster} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#1e3a8a'}}>RASCHEL MASTER SIGNATURE</div></div></div>)}
+          </div>
+          <div style={{border:'1px solid #1e3a8a',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#1e3a8a',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>2. SLITTING DATA BY SLITTING MASTER</div>
+            <div style={{padding:'6px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px',fontSize:'9px'}}>
+              <div><strong>Slitting Speed:</strong> {getVal('slittingSpeed')}</div><div><strong>After Slitting Size:</strong> {getVal('afterSlittingSize')}</div>
+              <div><strong>Magnet Check:</strong> {getVal('afterSlittingMagnet')}</div><div><strong>Mending Check:</strong> {getVal('mendingCheck')}</div>
+            </div>
+            {formData.sign_slittingRaschelMaster&&formData.sign_slittingRaschelMaster!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_slittingRaschelMaster==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#1e3a8a',padding:'4px'}}>✓ VERIFIED DIGITAL SIGN (DONE)</div>:<img src={formData.sign_slittingRaschelMaster} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#1e3a8a'}}>SLITTING MASTER SIGNATURE</div></div></div>)}
+          </div>
+          <div style={{border:'1px solid #1e3a8a',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#1e3a8a',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>3. STENTER 1 DATA BY STENTER MASTER</div>
+            <div style={{padding:'6px',fontSize:'9px'}}>
+              <div style={{marginBottom:'4px'}}><strong>Stenter Process:</strong> {getVal('stenterYesNo')}</div>
+              {formData.stenterYesNo==='YES'&&<div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px'}}><div><strong>Before Width:</strong> {getVal('beforeStenterWidth')}</div><div><strong>Temp:</strong> {getVal('stenterTemp')}</div><div><strong>Top Blower:</strong> {getVal('topBlowerSpeed')}</div><div><strong>Bottom Blower:</strong> {getVal('bottomBlowerSpeed')}</div><div><strong>Speed:</strong> {getVal('stenterSpeed')}</div><div><strong>After Size:</strong> {getVal('afterStenterSize')}</div></div>}
+            </div>
+            {formData.sign_stenterMaster1&&formData.sign_stenterMaster1!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_stenterMaster1==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#1e3a8a',padding:'4px'}}>✓ VERIFIED DIGITAL SIGN (DONE)</div>:<img src={formData.sign_stenterMaster1} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#1e3a8a'}}>STENTER MASTER SIGNATURE</div></div></div>)}
+          </div>
+          <div style={{border:'1px solid #1e3a8a',borderRadius:'5px',overflow:'hidden',marginBottom:'6px'}}>
+            <div style={{backgroundColor:'#1e3a8a',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>4. GREY POLISH DATA BY GREY POLISH MASTER</div>
+            <div style={{padding:'6px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px',fontSize:'9px'}}>
+              <div><strong>Polish Before Brushing:</strong> {getVal('polishBeforeBrushingYesNo')}</div><div><strong>Polish Speed:</strong> {getVal('polishSpeed')}</div>
+              <div><strong>Polish Temp:</strong> {getVal('polishTemp')}</div><div><strong>Table Brushing:</strong> {getVal('tableBrushingSpeed')}</div>
+              <div><strong>High Speed Brushing:</strong> {getVal('highSpeedBrushingYesNo')}</div><div><strong>HS Speed:</strong> {getVal('highSpeedBrushingSpeed')}</div>
+              <div><strong>Polish Machines:</strong> {getVal('howManyPolishMachineUsed')}</div><div><strong>Cylinders:</strong> {getVal('howManyCylinderUsed')}</div>
+              <div><strong>GP Speed:</strong> {getVal('greyPolishSpeed')}</div><div><strong>GP Temp:</strong> {getVal('greyPolishTemp')}</div>
+              <div style={{gridColumn:'span 2'}}><strong>After GP Size:</strong> {getVal('afterGreyPolishSize')}</div>
+            </div>
+            {formData.sign_greyPolishMaster&&formData.sign_greyPolishMaster!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_greyPolishMaster==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#1e3a8a',padding:'4px'}}>✓ VERIFIED DIGITAL SIGN (DONE)</div>:<img src={formData.sign_greyPolishMaster} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#1e3a8a'}}>GREY POLISH MASTER SIGNATURE</div></div></div>)}
+          </div>
+          <div style={{position:'absolute',bottom:'15px',left:'30px',right:'30px',display:'flex',justifyContent:'space-between',borderTop:'1px solid #e2e8f0',paddingTop:'6px',fontSize:'8px',color:'#94a3b8',fontWeight:'bold'}}>
+            <span>SARV INDIA HOME FURNISHING - SAMPLE NO: {getVal('sampleNo')}</span><span>Page 1 of 2</span>
+          </div>
+        </div>
+
+        <div id="pdf-page-2" className="printable-pdf-page">
+          <div style={{borderBottom:'3px solid #059669',paddingBottom:'8px',marginBottom:'14px',textAlign:'center',position:'relative'}}>
+            <h1 style={{color:'#059669',fontSize:'24px',margin:'0',fontWeight:'900'}}>SARV INDIA HOME FURNISHING</h1>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:'4px'}}>
+              <h2 style={{fontSize:'13px',color:'#475569',margin:'0',fontWeight:'700',textTransform:'uppercase',letterSpacing:'1.5px'}}>Official Sample Production Lot Card (Page 2)</h2>
+              <div style={{fontSize:'11px',fontWeight:'bold',backgroundColor:'#e6f4ea',color:'#047857',padding:'4px 10px',borderRadius:'5px',border:'1px solid #a7f3d0'}}>SAMPLE NO: {getVal('sampleNo')}</div>
+            </div>
+          </div>
+          <div style={{border:'1px solid #059669',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#059669',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>5. PRINTING, DRYING & PROCESS 2 BY PRINTING MASTER</div>
+            <div style={{display:'flex',padding:'6px',gap:'10px'}}>
+              <div style={{flex:'2',display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'4px 6px',fontSize:'8.5px'}}>
+                <div><strong>Chemical/Gum:</strong> {getVal('printingChemical')}</div><div><strong>Printing Repeat:</strong> {getVal('printingRepeat')}</div>
+                <div><strong>Azer Holding:</strong> {getVal('azerHoldingTime')}</div><div><strong>After Azer Size:</strong> {getVal('afterAzerSize')}</div>
+                <div><strong>Washing Chem:</strong> {getVal('washingChemical')}</div><div><strong>Washing Temp:</strong> {getVal('washingTemp')}</div>
+                <div><strong>Washing Speed:</strong> {getVal('washingSpeed')}</div><div><strong>Hydro:</strong> {getVal('hydro')}</div>
+                <div><strong>Caustic:</strong> {getVal('caustic')}</div><div><strong>Soaping:</strong> {getVal('soaping')}</div>
+                <div><strong>Silicon 1/2:</strong> {getVal('silicon1')}/{getVal('silicon2')}</div><div><strong>Bouncing:</strong> {getVal('bouncing')}</div>
+                <div style={{gridColumn:'span 3'}}><strong>After Washing Size:</strong> {getVal('afterWashingSize')}</div>
+              </div>
+              {formData.printingDesignPhoto?(<div style={{flex:'1',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',borderLeft:'1px solid #e2e8f0',paddingLeft:'8px'}}><span style={{fontSize:'7px',fontWeight:'bold',color:'#059669',marginBottom:'2px'}}>DESIGN PHOTO</span><img src={formData.printingDesignPhoto} alt="Design" style={{height:'58px',width:'90px',objectFit:'cover',border:'1px solid #cbd5e1',borderRadius:'3px'}}/></div>):(<div style={{flex:'1',display:'flex',alignItems:'center',justifyContent:'center',borderLeft:'1px solid #e2e8f0',paddingLeft:'8px',fontSize:'8px',color:'#94a3b8'}}>No Photo</div>)}
+            </div>
+            <div style={{borderTop:'1px dashed #cbd5e1',padding:'5px 8px',backgroundColor:'#f8fafc',fontSize:'8.5px'}}>
+              {formData.dryerProcess==='STENTER'?(<div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:'6px'}}><div style={{gridColumn:'span 5',fontWeight:'bold',color:'#1e3a8a'}}>&gt;&gt; PROCESS 2: STENTER</div><div><strong>Speed:</strong> {getVal('stenterSpeed2')}</div><div><strong>Temp:</strong> {getVal('stenterTemp2')}</div><div><strong>Top Blower:</strong> {getVal('topBlowerSpeed2')}</div><div><strong>Bottom Blower:</strong> {getVal('bottomBlowerSpeed2')}</div><div><strong>After Size:</strong> {getVal('afterStenterSize2')}</div></div>):(<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'6px'}}><div style={{gridColumn:'span 3',fontWeight:'bold',color:'#ea580c'}}>&gt;&gt; PROCESS 2: DRYER</div><div><strong>Dryer Speed:</strong> {getVal('dryerSpeed')}</div><div><strong>Dryer Temp:</strong> {getVal('dryerTemp')}</div><div><strong>After Size:</strong> {getVal('afterDryerSize')}</div></div>)}
+            </div>
+            <div style={{display:'flex',borderTop:'1px solid #cbd5e1',backgroundColor:'#f8fafc',padding:'3px 8px',gap:'15px',justifyContent:'flex-end',alignItems:'center'}}>
+              {formData.sign_printingMaster&&formData.sign_printingMaster!=='NA_BYPASSED'&&(<div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_printingMaster==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#059669',padding:'4px'}}>✓ VERIFIED (DONE)</div>:<img src={formData.sign_printingMaster} alt="sign" style={{height:'26px',objectFit:'contain'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#059669'}}>PRINTING MASTER</div></div>)}
+              {formData.dryerProcess==='STENTER'&&formData.sign_stenterMaster2&&formData.sign_stenterMaster2!=='NA_BYPASSED'&&(<div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_stenterMaster2==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#1e3a8a',padding:'4px'}}>✓ VERIFIED (DONE)</div>:<img src={formData.sign_stenterMaster2} alt="sign" style={{height:'26px',objectFit:'contain'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#1e3a8a'}}>STENTER MASTER</div></div>)}
+            </div>
+          </div>
+          <div style={{border:'1px solid #059669',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#059669',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>6. FINISHING PROCESS DATA BY FINISHING MASTER</div>
+            <div style={{padding:'6px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px',fontSize:'9px'}}>
+              <div><strong>Polish Before Brushing:</strong> {getVal('finishPolishBeforeBrushingYesNo')}</div><div><strong>Polish Speed:</strong> {getVal('finishPolishSpeed')}</div>
+              <div><strong>Polish Temp:</strong> {getVal('finishPolishTemp')}</div><div><strong>After Polish Size:</strong> {getVal('afterPolishSize')}</div>
+              <div><strong>Table Brushing:</strong> {getVal('finishTableBrushingSpeed')}</div><div><strong>After Brushing:</strong> {getVal('afterBrushingSize')}</div>
+              <div><strong>HS Brushing:</strong> {getVal('finishHighSpeedBrushingYesNo')}</div><div><strong>HS Speed:</strong> {getVal('finishHighSpeedBrushingSpeed')}</div>
+              <div><strong>Raising:</strong> {getVal('raisingYesNo')}</div><div><strong>Raising Machines:</strong> {getVal('howManyRaisingMachine')}</div>
+              <div><strong>% Raising:</strong> {getVal('percentRaising')}</div><div><strong>After Raising:</strong> {getVal('afterRaisingSize')}</div>
+              <div><strong>Polishers Final:</strong> {getVal('howManyPolisherFinal')}</div><div><strong>Polycuts Final:</strong> {getVal('howManyPolycutFinal')}</div>
+              <div><strong>Polisher Speed:</strong> {getVal('polisherSpeedFinal')}</div><div><strong>Polisher Temp:</strong> {getVal('polisherTempFinal')}</div>
+              <div><strong>After Polisher:</strong> {getVal('afterFinalPolisherSize')}</div><div><strong>Emboss:</strong> {getVal('embossYesNo')}</div>
+              <div><strong>Emboss Temp:</strong> {getVal('tempOfEmboss')}</div><div><strong>Emboss Holding:</strong> {getVal('holdingTimeOfEmboss')}</div>
+            </div>
+            {formData.sign_finishingMaster&&formData.sign_finishingMaster!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_finishingMaster==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#059669',padding:'4px'}}>✓ VERIFIED (DONE)</div>:<img src={formData.sign_finishingMaster} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#059669'}}>FINISHING MASTER</div></div></div>)}
+          </div>
+          <div style={{border:'1px solid #059669',borderRadius:'5px',overflow:'hidden',marginBottom:'12px'}}>
+            <div style={{backgroundColor:'#059669',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>7. PACKING PROCESS DATA BY PACKING CONTRACTOR</div>
+            <div style={{padding:'6px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'4px 8px',fontSize:'9px'}}>
+              <div><strong>Total Pcs:</strong> {getVal('totalPcs')}</div><div><strong>Avg Length:</strong> {getVal('averagePcsLength')}</div>
+              <div><strong>Avg Width:</strong> {getVal('averagePcsWidth')}</div><div><strong>Avg Weight:</strong> {getVal('avgPcsWeight')}</div>
+              <div style={{gridColumn:'span 2'}}><strong>Waste Weight:</strong> {getVal('totalWasteWeight')}</div>
+              <div style={{gridColumn:'span 2'}}><strong>Label:</strong> {getVal('label')}</div>
+            </div>
+            {formData.sign_packingContractor&&formData.sign_packingContractor!=='NA_BYPASSED'&&(<div style={{display:'flex',borderTop:'1px solid #e2e8f0',backgroundColor:'#f8fafc',padding:'3px 8px',justifyContent:'flex-end'}}><div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_packingContractor==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#059669',padding:'4px'}}>✓ VERIFIED (DONE)</div>:<img src={formData.sign_packingContractor} alt="sign" style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #94a3b8',fontWeight:'bold',color:'#059669'}}>PACKING CONTRACTOR</div></div></div>)}
+          </div>
+          <div style={{border:'2px solid #047857',borderRadius:'6px',overflow:'hidden',backgroundColor:'#fff'}}>
+            <div style={{backgroundColor:'#047857',color:'#fff',padding:'4px 8px',fontSize:'10px',fontWeight:'bold',textTransform:'uppercase'}}>8. QUALITY VERIFICATION CHECKS & FINAL DIRECTOR APPROVAL</div>
+            <div style={{padding:'6px 6px 3px 6px',display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:'6px'}}>
+              {[{k:'sign_checkedRaschel',l:'RASCHEL CHECK'},{k:'sign_checkedGreyPolish',l:'GREY POLISH'},{k:'sign_checkedPrinting',l:'PRINTING CHECK'},{k:'sign_checkedFinishing',l:'FINISHING CHECK'},{k:'sign_checkedGM',l:'GM VERIFIED'}].map(({k,l})=>(
+                <div key={k} style={{border:'1px solid #e2e8f0',borderRadius:'3px',padding:'3px',textAlign:'center'}}>
+                  {formData[k]&&formData[k]!=='NA_BYPASSED'?(formData[k]==='DONE'?<div style={{fontSize:'6px',color:'#047857',fontWeight:'bold'}}>VERIFIED</div>:<img src={formData[k]} alt={l} style={{height:'26px',objectFit:'contain',margin:'0 auto'}}/>):<div style={{height:'26px',lineHeight:'26px',fontSize:'6px',color:'#94a3b8'}}>Unsigned</div>}
+                  <p style={{fontSize:'6px',fontWeight:'bold',borderTop:'1px solid #f1f5f9',marginTop:'2px',paddingTop:'2px',textTransform:'uppercase'}}>{l}</p>
+                </div>
+              ))}
+            </div>
+            <div style={{borderTop:'1px solid #047857',display:'flex',justifyContent:'space-between',alignItems:'center',backgroundColor:'#f0fdf4',padding:'6px 12px'}}>
+              <div style={{fontSize:'9px'}}><strong>SAMPLE APPROVED BY MD:</strong> <span style={{color:'#047857',fontWeight:'bold'}}>{getVal('sampleApprovedYesNo')}</span></div>
+              {formData.sign_approvedMD&&formData.sign_approvedMD!=='NA_BYPASSED'&&(<div style={{textAlign:'center',fontSize:'7px'}}>{formData.sign_approvedMD==='DONE'?<div style={{fontSize:'8px',fontWeight:'bold',color:'#047857',padding:'4px'}}>✓ VERIFIED (DONE)</div>:<img src={formData.sign_approvedMD} alt="MD sign" style={{height:'30px',objectFit:'contain',margin:'0 auto'}}/>}<div style={{borderTop:'1px solid #047857',fontWeight:'bold',color:'#047857'}}>MANAGING DIRECTOR (MD)</div></div>)}
+            </div>
+          </div>
+          <div style={{position:'absolute',bottom:'15px',left:'30px',right:'30px',display:'flex',justifyContent:'space-between',borderTop:'1px solid #e2e8f0',paddingTop:'6px',fontSize:'8px',color:'#94a3b8',fontWeight:'bold'}}>
+            <span>SARV INDIA HOME FURNISHING - SAMPLE NO: {getVal('sampleNo')}</span><span>Page 2 of 2</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
