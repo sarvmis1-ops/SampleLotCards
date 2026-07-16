@@ -26,9 +26,9 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJILDaZ5gWzmD4WKisMrG3OND_0lpHjmJOCUHoGOkVWsN3y2U9CZ9wIK-9MmYA7WNx/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbystmqKNHa-7eRvaCx3ESi1ar9am41sObYziPw2kHxsnEE-rVNVVFEJmmBMIFg3ANPv/exec";
 
-// Role ->  allowed fields map (mirrors Code.gs exactly)
+// Role -> allowed fields map (mirrors Code.gs exactly)
 const ROLE_FIELD_MAP = {
   WEAVING:["sampleNo","lotNo","quality","bedSize","blanketPly","reqBlanketPcsWeightWithoutEverything","raschelGuage","raschelPyleHeight","pcPoDenier","pcPoEnds","microDenier","microEnds","raschelRollWeight","pcsWeightRequired","raschelWidth","afterRaschelSize","raschelRollLength","totalNoOfRoll","sign_weavingRaschelMaster","sign_checkedRaschel"],
   SLITTING:["slittingSpeed","afterSlittingSize","afterSlittingMagnet","mendingCheck","sign_slittingRaschelMaster"],
@@ -266,6 +266,20 @@ function App(){
   const [adminTarget,setAdminTarget]=useState('');
   const [adminPass,setAdminPass]=useState('');
   const [adminPassErr,setAdminPassErr]=useState('');
+  // User Management Panel
+  const [usersList,setUsersList]=useState([]);
+  const [usersLoading,setUsersLoading]=useState(false);
+  const [usersSaving,setUsersSaving]=useState(false);
+  const [editingUser,setEditingUser]=useState(null);
+  const [newUserForm,setNewUserForm]=useState({username:'',password:'',role:'WEAVING',displayName:'',isActive:'YES'});
+  const [showAddUser,setShowAddUser]=useState(false);
+  // Progress Dashboard
+  const [progressData,setProgressData]=useState([]);
+  const [progressLoading,setProgressLoading]=useState(false);
+  const [progressFilter,setProgressFilter]=useState('ALL');
+  // 'ALL' | 'NOT_STARTED' | 'IN_PROGRESS' | 'ALL_SIGNED' | 'COMPLETE'
+  const [progressSearch,setProgressSearch]=useState('');
+  const [progressSort,setProgressSort]=useState('LAST_UPDATED_DESC');
   // Notification
   const [notif,setNotif]=useState({show:false,msg:'',type:'info'});
   const showAlert=(msg,type='info')=>setNotif({show:true,msg,type});
@@ -355,6 +369,83 @@ function App(){
       setStatus('✅ Synced to Sheet!');
     }catch(e){setStatus('Sync error. Will retry.');}
     finally{setCloudSyncing(false);}
+  };
+
+  // ── USER MANAGEMENT ──────────────────────────────────────────────────────────
+  const fetchUsers=async()=>{
+    setUsersLoading(true);
+    try{
+      const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getUsers`);
+      const d=await res.json();
+      if(Array.isArray(d)) setUsersList(d);
+      else showAlert("Users load karne mein error aaya.","warning");
+    }catch(e){showAlert("Server se connect nahi hua.","warning");}
+    finally{setUsersLoading(false);}
+  };
+
+  const fetchProgress=async()=>{
+    setProgressLoading(true);
+    try{
+      const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getProgress`);
+      const d=await res.json();
+      if(Array.isArray(d)) setProgressData(d);
+      else showAlert("Progress data load nahi hua.","warning");
+    }catch(e){showAlert("Server se connect nahi hua.","warning");}
+    finally{setProgressLoading(false);}
+  };
+
+  const handleSaveUser=async(user)=>{
+    setUsersSaving(true);
+    try{
+      const res=await fetch(GOOGLE_SCRIPT_URL,{
+        method:'POST',headers:{'Content-Type':'text/plain'},
+        body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})
+      });
+      const d=await res.json();
+      if(d.status==='success'){
+        showAlert(`✅ User "${user.username}" updated!`,"success");
+        setEditingUser(null);
+        fetchUsers();
+      }else{showAlert(d.message||"Update failed.","warning");}
+    }catch(e){
+      // no-cors fallback
+      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})});
+      showAlert("Saved (no-cors mode — refresh to verify).","info");
+      setEditingUser(null);
+      fetchUsers();
+    }
+    finally{setUsersSaving(false);}
+  };
+
+  const handleAddUser=async()=>{
+    if(!newUserForm.username.trim()||!newUserForm.password.trim()||!newUserForm.displayName.trim()){
+      showAlert("Sab fields fill karein.","warning");return;
+    }
+    setUsersSaving(true);
+    try{
+      const res=await fetch(GOOGLE_SCRIPT_URL,{
+        method:'POST',headers:{'Content-Type':'text/plain'},
+        body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})
+      });
+      const d=await res.json();
+      if(d.status==='success'){
+        showAlert(`✅ User "${newUserForm.username}" add ho gaya!`,"success");
+        setNewUserForm({username:'',password:'',role:'WEAVING',displayName:'',isActive:'YES'});
+        setShowAddUser(false);
+        fetchUsers();
+      }else{showAlert(d.message||"Add failed.","warning");}
+    }catch(e){
+      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})});
+      showAlert("Saved (no-cors mode — refresh to verify).","info");
+      setShowAddUser(false);
+      fetchUsers();
+    }
+    finally{setUsersSaving(false);}
+  };
+
+  const handleToggleActive=async(user)=>{
+    const updated={...user,isActive:user.isActive==='YES'?'NO':'YES'};
+    await handleSaveUser(updated);
   };
 
   // ── LOGIN ───────────────────────────────────────────────────────────────────
@@ -628,6 +719,22 @@ function App(){
               <div><p className="text-xs font-bold">VIEW SUBMITTED LOTS</p><p className="text-[9px] text-emerald-100">Review finalized records</p></div>
             </div><span>➔</span>
           </button>
+          {currentUser.role==='ADMIN'&&(<>
+            <button onClick={()=>{setAppMode('progress-dashboard');fetchProgress();}}
+              className="w-full flex items-center justify-between bg-purple-700 hover:bg-purple-800 text-white font-bold py-3.5 px-5 rounded-xl shadow active:scale-95">
+              <div className="flex items-center text-left">
+                <span className="text-xl mr-2.5">📊</span>
+                <div><p className="text-xs font-bold">PRODUCTION PROGRESS</p><p className="text-[9px] text-purple-200">Live status of all lot cards</p></div>
+              </div><span>➔</span>
+            </button>
+            <button onClick={()=>{setAppMode('user-mgmt');fetchUsers();}}
+              className="w-full flex items-center justify-between bg-gray-800 hover:bg-gray-900 text-white font-bold py-3.5 px-5 rounded-xl shadow active:scale-95">
+              <div className="flex items-center text-left">
+                <span className="text-xl mr-2.5">👥</span>
+                <div><p className="text-xs font-bold">USER MANAGEMENT</p><p className="text-[9px] text-gray-400">Change names, passwords & roles</p></div>
+              </div><span>➔</span>
+            </button>
+          </>)}
         </div>
         <div className="mt-5 pt-4 border-t flex items-center justify-between">
           <span className={`flex items-center gap-1.5 text-[10px] font-bold ${isOnline?'text-green-600':'text-red-500'}`}>
@@ -635,6 +742,408 @@ function App(){
             {isOnline?"Online":"Offline"}
           </span>
           <button onClick={handleLogout} className="text-[10px] font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg">🚪 Logout</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PROGRESS DASHBOARD SCREEN (ADMIN ONLY)
+  // ══════════════════════════════════════════════════════════════════════════
+  if(appMode==='progress-dashboard'){
+
+    // ── Derived stats ────────────────────────────────────────────────────────
+    const total       = progressData.length;
+    const notStarted  = progressData.filter(r=>r.OVERALL_STATUS&&r.OVERALL_STATUS.includes('NOT STARTED')).length;
+    const inProgress  = progressData.filter(r=>r.OVERALL_STATUS&&r.OVERALL_STATUS.includes('IN PROGRESS')).length;
+    const allSigned   = progressData.filter(r=>r.OVERALL_STATUS&&r.OVERALL_STATUS.includes('ALL SIGNED')).length;
+    const complete    = progressData.filter(r=>r.OVERALL_STATUS&&r.OVERALL_STATUS.includes('COMPLETE')).length;
+
+    // ── Filter + search + sort ────────────────────────────────────────────────
+    let filtered = progressData.filter(r=>{
+      if(!r.SAMPLE_NO) return false;
+      const q=progressSearch.trim().toLowerCase();
+      if(q && !r.SAMPLE_NO.toLowerCase().includes(q) && !(r.LOT_NO||'').toLowerCase().includes(q) && !(r.QUALITY||'').toLowerCase().includes(q)) return false;
+      if(progressFilter==='NOT_STARTED'  && !(r.OVERALL_STATUS||'').includes('NOT STARTED'))  return false;
+      if(progressFilter==='IN_PROGRESS'  && !(r.OVERALL_STATUS||'').includes('IN PROGRESS'))  return false;
+      if(progressFilter==='ALL_SIGNED'   && !(r.OVERALL_STATUS||'').includes('ALL SIGNED'))   return false;
+      if(progressFilter==='COMPLETE'     && !(r.OVERALL_STATUS||'').includes('COMPLETE'))      return false;
+      return true;
+    });
+
+    // Sort
+    filtered = [...filtered].sort((a,b)=>{
+      if(progressSort==='SAMPLE_ASC')          return a.SAMPLE_NO.localeCompare(b.SAMPLE_NO);
+      if(progressSort==='SAMPLE_DESC')         return b.SAMPLE_NO.localeCompare(a.SAMPLE_NO);
+      if(progressSort==='STEPS_DESC')          return (parseInt(b.STEPS_DONE)||0)-(parseInt(a.STEPS_DONE)||0);
+      if(progressSort==='STEPS_ASC')           return (parseInt(a.STEPS_DONE)||0)-(parseInt(b.STEPS_DONE)||0);
+      // Default: last updated desc
+      return new Date(b.LAST_UPDATED||0)-new Date(a.LAST_UPDATED||0);
+    });
+
+    // ── Row color helper ──────────────────────────────────────────────────────
+    const rowBg=(r)=>{
+      const s=r.OVERALL_STATUS||'';
+      if(s.includes('COMPLETE'))   return 'bg-green-50 border-green-200';
+      if(s.includes('ALL SIGNED')) return 'bg-blue-50 border-blue-200';
+      if(s.includes('IN PROGRESS'))return 'bg-yellow-50 border-yellow-200';
+      return 'bg-red-50 border-red-200';
+    };
+    const statusBadge=(r)=>{
+      const s=r.OVERALL_STATUS||'';
+      if(s.includes('COMPLETE'))   return 'bg-green-100 text-green-800';
+      if(s.includes('ALL SIGNED')) return 'bg-blue-100 text-blue-800';
+      if(s.includes('IN PROGRESS'))return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-700';
+    };
+
+    // Production sign columns (key → short label)
+    const PROD_COLS=[
+      {k:'WEAVING_SIGN',  lbl:'WEAV'},
+      {k:'SLITTING_SIGN', lbl:'SLIT'},
+      {k:'STENTER1_SIGN', lbl:'STEN'},
+      {k:'GREY_POLISH_SIGN',lbl:'GP'},
+      {k:'PRINTING_SIGN', lbl:'PRNT'},
+      {k:'FINISHING_SIGN',lbl:'FNSH'},
+      {k:'PACKING_SIGN',  lbl:'PACK'},
+    ];
+    const QC_COLS=[
+      {k:'QC_RASCHEL',   lbl:'R'},
+      {k:'QC_GREY_POLISH',lbl:'GP'},
+      {k:'QC_PRINTING',  lbl:'PR'},
+      {k:'QC_FINISHING', lbl:'FN'},
+      {k:'QC_GM',        lbl:'GM'},
+    ];
+
+    const isDone=(v)=>v&&(v.includes('✅')||v==='✅');
+    const isNA =(v)=>v&&v.includes('N/A');
+
+    const SignDot=({val})=>{
+      if(isNA(val)) return <span className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-black text-gray-400">N/A</span>;
+      return isDone(val)
+        ?<span className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+        :<span className="w-5 h-5 rounded-full bg-red-400 flex items-center justify-center text-white text-[10px]">✕</span>;
+    };
+
+    const ProgressBar=({done,total})=>{
+      const pct=total>0?Math.round((done/total)*100):0;
+      const col=pct===100?'bg-green-500':pct>=70?'bg-blue-500':pct>=30?'bg-yellow-400':'bg-red-400';
+      return(
+        <div className="flex items-center gap-1.5 w-full">
+          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className={`h-2 rounded-full transition-all ${col}`} style={{width:`${pct}%`}}></div>
+          </div>
+          <span className="text-[9px] font-black text-gray-600 w-8 text-right">{done}/{total}</span>
+        </div>
+      );
+    };
+
+    return(
+      <div className="min-h-screen bg-gray-50 pb-16 w-full">
+
+        {/* STICKY HEADER */}
+        <div className="bg-purple-800 text-white sticky top-0 z-20 shadow-lg">
+          <div className="flex items-center justify-between p-3 max-w-5xl mx-auto">
+            <button onClick={()=>setAppMode('menu')} className="text-white font-bold text-xs flex items-center gap-1">← Menu</button>
+            <div className="text-center">
+              <h1 className="font-black text-sm tracking-wide">📊 PRODUCTION PROGRESS</h1>
+              <p className="text-[9px] text-purple-200 uppercase tracking-wider">All Sample Lot Cards — Live Status</p>
+            </div>
+            <button onClick={fetchProgress}
+              className={`text-[10px] font-bold bg-purple-600 hover:bg-purple-500 px-2.5 py-1.5 rounded-lg flex items-center gap-1 ${progressLoading?'opacity-60':''}`}>
+              {progressLoading?<span className="animate-spin">⏳</span>:'🔄'} Refresh
+            </button>
+          </div>
+
+          {/* SUMMARY STATS BAR */}
+          <div className="grid grid-cols-5 border-t border-purple-700 text-center">
+            {[
+              {label:'TOTAL',  val:total,      bg:'bg-purple-700', active:progressFilter==='ALL'},
+              {label:'🔴 PENDING', val:notStarted, bg:'bg-red-700',    active:progressFilter==='NOT_STARTED'},
+              {label:'🟡 IN PROG', val:inProgress, bg:'bg-yellow-600',  active:progressFilter==='IN_PROGRESS'},
+              {label:'🔵 SIGNED', val:allSigned,  bg:'bg-blue-700',   active:progressFilter==='ALL_SIGNED'},
+              {label:'🟢 DONE',   val:complete,   bg:'bg-green-700',  active:progressFilter==='COMPLETE'},
+            ].map((s,i)=>(
+              <button key={i}
+                onClick={()=>setProgressFilter(['ALL','NOT_STARTED','IN_PROGRESS','ALL_SIGNED','COMPLETE'][i])}
+                className={`py-2 px-1 transition-all ${s.bg} ${s.active?'opacity-100 scale-y-100 border-b-2 border-white':'opacity-70 hover:opacity-90'}`}>
+                <div className="text-base font-black text-white leading-none">{s.val}</div>
+                <div className="text-[8px] text-white/80 font-bold uppercase mt-0.5 leading-none">{s.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="max-w-5xl mx-auto p-3 space-y-3">
+
+          {/* SEARCH + SORT BAR */}
+          <div className="flex gap-2 items-center">
+            <div className="flex-1 relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+              <input value={progressSearch} onChange={e=>setProgressSearch(e.target.value)}
+                placeholder="Search by Sample No, Lot, Quality..."
+                className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-xl text-xs outline-none focus:border-purple-500 bg-white shadow-sm"/>
+            </div>
+            <select value={progressSort} onChange={e=>setProgressSort(e.target.value)}
+              className="border border-gray-300 rounded-xl text-[10px] py-2 px-2 outline-none focus:border-purple-500 bg-white shadow-sm font-bold">
+              <option value="LAST_UPDATED_DESC">⏱ Latest First</option>
+              <option value="STEPS_DESC">📈 Most Complete</option>
+              <option value="STEPS_ASC">📉 Least Complete</option>
+              <option value="SAMPLE_ASC">🔤 Sample A→Z</option>
+              <option value="SAMPLE_DESC">🔤 Sample Z→A</option>
+            </select>
+          </div>
+
+          {/* LEGEND */}
+          <div className="flex flex-wrap gap-2 text-[9px] font-bold">
+            <span className="flex items-center gap-1"><span className="w-3.5 h-3.5 rounded-full bg-green-500 inline-block"></span>Done</span>
+            <span className="flex items-center gap-1"><span className="w-3.5 h-3.5 rounded-full bg-red-400 inline-block"></span>Pending</span>
+            <span className="flex items-center gap-1"><span className="w-3.5 h-3.5 rounded-full bg-gray-200 inline-block"></span>N/A</span>
+            <span className="ml-auto text-gray-500">{filtered.length} of {total} records</span>
+          </div>
+
+          {/* LOADING STATE */}
+          {progressLoading&&(
+            <div className="text-center py-12">
+              <span className="text-3xl animate-spin inline-block">⏳</span>
+              <p className="text-xs text-gray-400 font-bold mt-2">Loading from Google Sheet...</p>
+            </div>
+          )}
+
+          {/* EMPTY STATE */}
+          {!progressLoading&&filtered.length===0&&(
+            <div className="text-center py-12 bg-white border border-dashed border-gray-200 rounded-2xl">
+              <span className="text-4xl">📭</span>
+              <p className="text-gray-400 font-bold text-xs mt-2">
+                {total===0?"No data yet. Sync a sample first to see progress.":"No records match your filter."}
+              </p>
+              {total===0&&<button onClick={fetchProgress} className="mt-3 bg-purple-600 text-white text-xs font-bold px-4 py-2 rounded-xl">🔄 Load Data</button>}
+            </div>
+          )}
+
+          {/* CARDS LIST */}
+          {!progressLoading&&filtered.map((r,i)=>(
+            <div key={r.SAMPLE_NO||i} className={`border rounded-2xl overflow-hidden shadow-sm ${rowBg(r)}`}>
+
+              {/* CARD HEADER */}
+              <div className="flex items-center justify-between px-3.5 py-2.5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-sm text-gray-900">{r.SAMPLE_NO}</span>
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${statusBadge(r)}`}>
+                      {r.OVERALL_STATUS||'—'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    Lot: <strong>{r.LOT_NO||'—'}</strong> &nbsp;|&nbsp;
+                    Quality: <strong>{r.QUALITY||'—'}</strong> &nbsp;|&nbsp;
+                    {r.BED_SIZE} · {r.BLANKET_PLY}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className={`text-[10px] font-black px-2 py-1 rounded-lg ${r.IS_SUBMITTED&&r.IS_SUBMITTED.includes('YES')?'bg-green-200 text-green-900':'bg-gray-100 text-gray-600'}`}>
+                    {r.IS_SUBMITTED&&r.IS_SUBMITTED.includes('YES')?'✅ Submitted':'🟡 Active'}
+                  </span>
+                  {r.LAST_UPDATED&&<p className="text-[8px] text-gray-400 mt-1">{new Date(r.LAST_UPDATED).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</p>}
+                </div>
+              </div>
+
+              {/* PROGRESS BAR */}
+              <div className="px-3.5 pb-2">
+                <ProgressBar done={parseInt(r.STEPS_DONE)||0} total={parseInt(r.STEPS_TOTAL)||14}/>
+              </div>
+
+              {/* PRODUCTION SIGNS ROW */}
+              <div className="px-3.5 py-2 border-t border-white/60 bg-white/40">
+                <p className="text-[9px] font-black text-gray-500 uppercase mb-1.5 tracking-wider">Production Signatures</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {PROD_COLS.map(col=>(
+                    <div key={col.k} className="flex flex-col items-center gap-0.5">
+                      <SignDot val={r[col.k]}/>
+                      <span className="text-[7px] font-black text-gray-500">{col.lbl}</span>
+                    </div>
+                  ))}
+                  <div className="w-px h-8 bg-gray-300 mx-1"></div>
+                  {/* MD Approval */}
+                  <div className="flex flex-col items-center gap-0.5">
+                    <SignDot val={r.MD_APPROVED}/>
+                    <span className="text-[7px] font-black text-gray-500">MD</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* QC CHECKS ROW */}
+              <div className="px-3.5 py-2 border-t border-white/60 bg-white/20">
+                <p className="text-[9px] font-black text-gray-500 uppercase mb-1.5 tracking-wider">QC Checks</p>
+                <div className="flex items-center gap-1.5">
+                  {QC_COLS.map(col=>(
+                    <div key={col.k} className="flex flex-col items-center gap-0.5">
+                      <SignDot val={r[col.k]}/>
+                      <span className="text-[7px] font-black text-gray-500">{col.lbl}</span>
+                    </div>
+                  ))}
+                  {r.PDF_DRIVE_URL&&r.PDF_DRIVE_URL!=='NA'&&r.PDF_DRIVE_URL!==''&&(
+                    <a href={r.PDF_DRIVE_URL} target="_blank" rel="noopener noreferrer"
+                      className="ml-auto bg-green-600 text-white text-[9px] font-black px-2.5 py-1 rounded-lg shadow flex items-center gap-1 active:scale-95">
+                      📄 PDF
+                    </a>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          ))}
+
+          {/* BOTTOM NOTE */}
+          {!progressLoading&&total>0&&(
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-[10px] text-purple-700 font-bold text-center">
+              💡 Data Google Sheet ke SampleProgress tab se live fetch hota hai.<br/>
+              Koi bhi section save hote hi ye automatically update ho jaata hai.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // USER MANAGEMENT SCREEN (admin only)
+  if(appMode==='user-mgmt') return(
+    <div className="min-h-screen bg-gray-50 pb-16 w-full">
+      <div className="bg-gray-900 text-white p-4 sticky top-0 z-10 flex items-center justify-between shadow">
+        <button onClick={()=>setAppMode('menu')} className="text-white font-bold text-xs">← Menu</button>
+        <h1 className="font-bold text-xs uppercase tracking-wider">👥 User Management</h1>
+        <button onClick={fetchUsers} className="text-[10px] font-bold bg-gray-700 px-2 py-1 rounded">🔄</button>
+      </div>
+      <div className="max-w-lg mx-auto p-3 space-y-3">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-[11px] text-yellow-800 font-bold">
+          ⚠️ Yahan se aap kisi bhi user ka naam, password aur role change kar sakte hain. Changes directly Google Sheet pe save honge.
+        </div>
+
+        {/* ADD NEW USER TOGGLE */}
+        <button onClick={()=>setShowAddUser(!showAddUser)}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 active:scale-95">
+          {showAddUser?'✕ Cancel':'➕ Add New User'}
+        </button>
+
+        {/* ADD USER FORM */}
+        {showAddUser&&(
+          <div className="bg-white border-2 border-blue-300 rounded-xl p-4 space-y-2.5 shadow">
+            <p className="text-xs font-black text-blue-800 uppercase">New User Details</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-black text-gray-600 uppercase">Display Name</label>
+                <input value={newUserForm.displayName} onChange={e=>setNewUserForm(p=>({...p,displayName:e.target.value}))}
+                  placeholder="e.g. Raju Sharma" className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500"/>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-gray-600 uppercase">Username</label>
+                <input value={newUserForm.username} onChange={e=>setNewUserForm(p=>({...p,username:e.target.value.toLowerCase().replace(/\s/g,'')}))}
+                  placeholder="e.g. raju" className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500"/>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-gray-600 uppercase">Password</label>
+                <input value={newUserForm.password} onChange={e=>setNewUserForm(p=>({...p,password:e.target.value}))}
+                  placeholder="Set password" className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500"/>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-gray-600 uppercase">Role</label>
+                <select value={newUserForm.role} onChange={e=>setNewUserForm(p=>({...p,role:e.target.value}))}
+                  className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white">
+                  {Object.keys(ROLE_LABELS).map(r=><option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={handleAddUser} disabled={usersSaving}
+              className="w-full bg-green-600 text-white font-bold py-2 rounded-lg text-xs active:scale-95 disabled:opacity-50">
+              {usersSaving?'Saving...':'✅ Add User to Sheet'}
+            </button>
+          </div>
+        )}
+
+        {/* USERS LIST */}
+        {usersLoading?(
+          <div className="text-center py-8 text-gray-400 font-bold text-xs">
+            <span className="animate-spin inline-block mr-2">⏳</span>Loading users from Sheet...
+          </div>
+        ):(
+          <div className="space-y-2">
+            {usersList.length===0&&<div className="text-center py-8 text-gray-400 font-bold text-xs">No users found. Click 🔄 to refresh.</div>}
+            {usersList.map((u,i)=>(
+              <div key={i} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${u.isActive==='NO'?'border-red-200 opacity-60':'border-gray-200'}`}>
+                {editingUser&&editingUser.rowIndex===u.rowIndex?(
+                  /* EDIT MODE */
+                  <div className="p-3 space-y-2 bg-blue-50 border-2 border-blue-300 rounded-xl">
+                    <p className="text-[10px] font-black text-blue-800 uppercase">Editing: {u.username}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-black text-gray-600 uppercase">Display Name</label>
+                        <input value={editingUser.displayName} onChange={e=>setEditingUser(p=>({...p,displayName:e.target.value}))}
+                          className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white"/>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-600 uppercase">Username</label>
+                        <input value={editingUser.username} onChange={e=>setEditingUser(p=>({...p,username:e.target.value.toLowerCase().replace(/\s/g,'')}))}
+                          className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white"/>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-600 uppercase">New Password</label>
+                        <input value={editingUser.password} onChange={e=>setEditingUser(p=>({...p,password:e.target.value}))}
+                          placeholder="Enter new password" className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white"/>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-600 uppercase">Role</label>
+                        <select value={editingUser.role} onChange={e=>setEditingUser(p=>({...p,role:e.target.value}))}
+                          className="w-full mt-0.5 p-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white">
+                          {Object.keys(ROLE_LABELS).map(r=><option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={()=>setEditingUser(null)} className="flex-1 bg-gray-200 text-gray-700 font-bold py-1.5 rounded-lg text-xs">Cancel</button>
+                      <button onClick={()=>handleSaveUser(editingUser)} disabled={usersSaving}
+                        className="flex-1 bg-blue-600 text-white font-bold py-1.5 rounded-lg text-xs disabled:opacity-50">
+                        {usersSaving?'Saving...':'💾 Save Changes'}
+                      </button>
+                    </div>
+                  </div>
+                ):(
+                  /* VIEW MODE */
+                  <div className="flex items-center justify-between p-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-[10px] font-black ${ROLE_COLORS[u.role]||'bg-gray-500'}`}>
+                        {(u.displayName||u.username||'?').charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-xs font-black text-gray-800">{u.displayName||u.username}</p>
+                        <p className="text-[10px] text-gray-500">@{u.username} · {ROLE_LABELS[u.role]||u.role}</p>
+                        <p className="text-[9px] text-gray-400">Pass: <span className="font-mono bg-gray-100 px-1 rounded">{u.password||'••••'}</span></p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1 items-end">
+                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${u.isActive==='YES'?'bg-green-100 text-green-700':'bg-red-100 text-red-600'}`}>
+                        {u.isActive==='YES'?'ACTIVE':'INACTIVE'}
+                      </span>
+                      <div className="flex gap-1 mt-0.5">
+                        <button onClick={()=>setEditingUser({...u})}
+                          className="bg-blue-100 text-blue-700 text-[9px] font-bold px-2 py-1 rounded-lg">✏️ Edit</button>
+                        {u.username!=='admin'&&(
+                          <button onClick={()=>handleToggleActive(u)}
+                            className={`text-[9px] font-bold px-2 py-1 rounded-lg ${u.isActive==='YES'?'bg-red-100 text-red-600':'bg-green-100 text-green-700'}`}>
+                            {u.isActive==='YES'?'🚫 Disable':'✅ Enable'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-[10px] text-blue-700">
+          💡 <strong>Pro Tip:</strong> Password change karne ke baad user ko logout karke dobara login karna hoga.
+          <br/>🔴 Disabled user ko login access nahi milega jab tak Admin enable kare.
         </div>
       </div>
     </div>
