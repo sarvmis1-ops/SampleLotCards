@@ -26,7 +26,7 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbystmqKNHa-7eRvaCx3ESi1ar9am41sObYziPw2kHxsnEE-rVNVVFEJmmBMIFg3ANPv/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqomqLCDS8net0GnScCXazBeqGKH5j2ta6V8SQdDptYlbEBdF-VUlY9golOvtjAZ0/exec";
 
 // Role -> allowed fields map (mirrors Code.gs exactly)
 const ROLE_FIELD_MAP = {
@@ -172,7 +172,9 @@ const SignaturePad=({title,value,onChange,onClearAttempt,noAccess=false,isSectio
   const stopDraw=()=>{if(isDrawing&&!locked) setIsDrawing(false);};
   const handleSave=()=>{
     if(locked) return;
-    onChange(canvasRef.current.toDataURL('image/png',0.5));
+    // Get drawn signature as compressed PNG base64
+    const dataUrl=canvasRef.current.toDataURL('image/png',0.5);
+    onChange(dataUrl); // updates formData via updateField → triggers autoSync in updateField
     setIsOpen(false);
     if(navigator.vibrate) navigator.vibrate(80);
   };
@@ -351,25 +353,55 @@ function App(){
     if(!canEditField(currentUser?.role,field)) return;
     setFormData(prev=>{
       const next={...prev,[field]:value};
-      const autoSync=['sign_','dryerProcess','stenterYesNo','polishBeforeBrushingYesNo','highSpeedBrushingYesNo','finishHighSpeedBrushingYesNo','finishPolishBeforeBrushingYesNo','raisingYesNo','embossYesNo','bedSize','blanketPly','sampleApprovedYesNo'];
-      if(autoSync.some(p=>field.startsWith(p)||field===p)) triggerSync(next);
+      // Auto-sync triggers: signatures (always), selects, toggles
+      const autoSyncPrefixes=['sign_','dryerProcess','stenterYesNo','polishBeforeBrushingYesNo',
+        'highSpeedBrushingYesNo','finishHighSpeedBrushingYesNo','finishPolishBeforeBrushingYesNo',
+        'raisingYesNo','embossYesNo','bedSize','blanketPly','sampleApprovedYesNo'];
+      // Signatures ALWAYS trigger immediate sync so base64 PNG reaches server right away
+      const isSignature=field.startsWith('sign_');
+      if(isSignature||autoSyncPrefixes.some(p=>field===p)){
+        // Small delay for signatures to ensure state is settled before sync
+        if(isSignature){
+          setTimeout(()=>triggerSync(next),200);
+        } else {
+          triggerSync(next);
+        }
+      }
       return next;
     });
   };
 
   // ── CLOUD SYNC ──────────────────────────────────────────────────────────────
+  // 💡 FIX: Content-Type MUST be 'text/plain' for GAS to read POST body via no-cors.
+  // 'application/json' triggers CORS preflight which GAS cannot respond to — body gets dropped.
+  // 'text/plain' is a simple CORS request — body passes through to e.postData.contents correctly.
   const triggerSync=async(data=formData)=>{
     if(!activeSampleId||!data.sampleNo) return;
     const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]');
     if(del.map(i=>String(i).toUpperCase()).includes(String(activeSampleId).toUpperCase())) return;
     if(!isOnline){setStatus('Offline — saved to device memory.');return;}
-    setCloudSyncing(true);setStatus('Syncing to Google Sheets...');
+    setCloudSyncing(true);
+    // Detect if this sync contains a fresh signature (base64 PNG)
+    const hasSig=Object.keys(data).some(k=>k.startsWith('sign_')&&data[k]&&String(data[k]).startsWith('data:image'));
+    setStatus(hasSig?'📝 Saving signature to Drive...':'Syncing to Google Sheets...');
     try{
-      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,username:currentUser?.username||''})});
-      setStatus('✅ Synced to Sheet!');
-    }catch(e){setStatus('Sync error. Will retry.');}
+      // Strip printingDesignPhoto — large base64 ~80KB, only sent on finalSubmit
+      const {printingDesignPhoto:_p,...cleanData}=data;
+      await fetch(GOOGLE_SCRIPT_URL,{
+        method:'POST',
+        mode:'no-cors',
+        headers:{'Content-Type':'text/plain'},
+        body:JSON.stringify({...cleanData,username:currentUser?.username||''})
+      });
+      setStatus(hasSig?'✅ Signature saved to Drive & Sheet!':'✅ Synced to Sheet!');
+    }catch(e){setStatus('Sync error. Retry karein.');}
     finally{setCloudSyncing(false);}
   };
+
+  // Stale closure fix: always sync with latest formData when called from onBlur
+  const formDataRef=React.useRef(formData);
+  React.useEffect(()=>{formDataRef.current=formData;},[formData]);
+  const triggerSyncLatest=()=>triggerSync(formDataRef.current);
 
   // ── USER MANAGEMENT ──────────────────────────────────────────────────────────
   const fetchUsers=async()=>{
@@ -409,7 +441,7 @@ function App(){
       }else{showAlert(d.message||"Update failed.","warning");}
     }catch(e){
       // no-cors fallback
-      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})});
+      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})});
       showAlert("Saved (no-cors mode — refresh to verify).","info");
       setEditingUser(null);
       fetchUsers();
@@ -435,7 +467,7 @@ function App(){
         fetchUsers();
       }else{showAlert(d.message||"Add failed.","warning");}
     }catch(e){
-      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})});
+      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})});
       showAlert("Saved (no-cors mode — refresh to verify).","info");
       setShowAddUser(false);
       fetchUsers();
@@ -563,7 +595,7 @@ function App(){
     if(!d.map(i=>String(i).toUpperCase()).includes(up)){d.push(up);localStorage.setItem('sarv_deleted_samples',JSON.stringify(d));}
     setSamplesList(prev=>prev.filter(i=>String(i.sampleNo).toUpperCase()!==up));
     showAlert(`Sample ${id} deleted.`,"success");
-    if(isOnline) fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete',sampleNo:up})}).catch(()=>{});
+    if(isOnline) fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'delete',sampleNo:up})}).catch(()=>{});
   };
 
   // ── PHOTO UPLOAD ─────────────────────────────────────────────────────────────
@@ -575,7 +607,23 @@ function App(){
       img.onload=()=>{
         const c=document.createElement('canvas');const W=500;const sc=W/img.width;
         c.width=W;c.height=img.height*sc;c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        updateField('printingDesignPhoto',c.toDataURL('image/jpeg',0.65));
+        const photoDataUrl=c.toDataURL('image/jpeg',0.65);
+        // Update local state first
+        setFormData(prev=>{
+          const next={...prev,printingDesignPhoto:photoDataUrl};
+          // Send photo in its own dedicated sync (not stripped like regular syncs)
+          setTimeout(()=>{
+            const {printingDesignPhoto:_p,...rest}=next;
+            // Photo sent separately as a targeted field-only payload
+            fetch(GOOGLE_SCRIPT_URL,{
+              method:'POST',mode:'no-cors',
+              headers:{'Content-Type':'text/plain'},
+              body:JSON.stringify({sampleNo:next.sampleNo,printingDesignPhoto:photoDataUrl,username:currentUser?.username||''})
+            }).catch(()=>{});
+          },300);
+          return next;
+        });
+        setStatus('📷 Design photo saved!');
       };img.src=ev.target.result;
     };r.readAsDataURL(f);
   };
@@ -1268,23 +1316,23 @@ function App(){
         <Section title="WEAVING DATA BY RASCHEL MASTER" defaultOpen={true} isSectionLocked={isWeavingLocked}>
           <div className="grid grid-cols-2 gap-2.5">
             <Input label="Sample No (Read Only)" value={formData.sampleNo} readOnly={true}/>
-            <Input label="Lot No" value={formData.lotNo} onChange={v=>updateField('lotNo',v)} onBlurSync={()=>triggerSync()} noAccess={fe('lotNo')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Quality Code" value={formData.quality} onChange={v=>updateField('quality',v)} onBlurSync={()=>triggerSync()} noAccess={fe('quality')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Lot No" value={formData.lotNo} onChange={v=>updateField('lotNo',v)} onBlurSync={triggerSyncLatest} noAccess={fe('lotNo')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Quality Code" value={formData.quality} onChange={v=>updateField('quality',v)} onBlurSync={triggerSyncLatest} noAccess={fe('quality')} isSectionLocked={isWeavingLocked}/>
             <Input label="Bed Size" type="select" options={['DOUBLE','SINGLE']} value={formData.bedSize} onChange={v=>updateField('bedSize',v)} noAccess={fe('bedSize')} isSectionLocked={isWeavingLocked}/>
             <Input label="Blanket Ply" type="select" options={['SINGLE PLY','DOUBLE PLY']} value={formData.blanketPly} onChange={v=>updateField('blanketPly',v)} noAccess={fe('blanketPly')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Required Blanket Weight" value={formData.reqBlanketPcsWeightWithoutEverything} onChange={v=>updateField('reqBlanketPcsWeightWithoutEverything',v)} onBlurSync={()=>triggerSync()} noAccess={fe('reqBlanketPcsWeightWithoutEverything')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Raschel Guage" value={formData.raschelGuage} onChange={v=>updateField('raschelGuage',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelGuage')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Raschel Pyle Height" value={formData.raschelPyleHeight} onChange={v=>updateField('raschelPyleHeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelPyleHeight')} isSectionLocked={isWeavingLocked}/>
-            <Input label="PC PO Denier" value={formData.pcPoDenier} onChange={v=>updateField('pcPoDenier',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcPoDenier')} isSectionLocked={isWeavingLocked}/>
-            <Input label="PC PO Ends" value={formData.pcPoEnds} onChange={v=>updateField('pcPoEnds',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcPoEnds')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Micro Denier" value={formData.microDenier} onChange={v=>updateField('microDenier',v)} onBlurSync={()=>triggerSync()} noAccess={fe('microDenier')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Micro Ends" value={formData.microEnds} onChange={v=>updateField('microEnds',v)} onBlurSync={()=>triggerSync()} noAccess={fe('microEnds')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Raschel Roll Weight" value={formData.raschelRollWeight} onChange={v=>updateField('raschelRollWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelRollWeight')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Pcs Weight Required" value={formData.pcsWeightRequired} onChange={v=>updateField('pcsWeightRequired',v)} onBlurSync={()=>triggerSync()} noAccess={fe('pcsWeightRequired')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Raschel Width" value={formData.raschelWidth} onChange={v=>updateField('raschelWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelWidth')} isSectionLocked={isWeavingLocked}/>
-            <Input label="After Raschel Size" value={formData.afterRaschelSize} onChange={v=>updateField('afterRaschelSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterRaschelSize')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Raschel Roll Length" value={formData.raschelRollLength} onChange={v=>updateField('raschelRollLength',v)} onBlurSync={()=>triggerSync()} noAccess={fe('raschelRollLength')} isSectionLocked={isWeavingLocked}/>
-            <Input label="Total No of Roll" value={formData.totalNoOfRoll} onChange={v=>updateField('totalNoOfRoll',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalNoOfRoll')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Required Blanket Weight" value={formData.reqBlanketPcsWeightWithoutEverything} onChange={v=>updateField('reqBlanketPcsWeightWithoutEverything',v)} onBlurSync={triggerSyncLatest} noAccess={fe('reqBlanketPcsWeightWithoutEverything')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Guage" value={formData.raschelGuage} onChange={v=>updateField('raschelGuage',v)} onBlurSync={triggerSyncLatest} noAccess={fe('raschelGuage')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Pyle Height" value={formData.raschelPyleHeight} onChange={v=>updateField('raschelPyleHeight',v)} onBlurSync={triggerSyncLatest} noAccess={fe('raschelPyleHeight')} isSectionLocked={isWeavingLocked}/>
+            <Input label="PC PO Denier" value={formData.pcPoDenier} onChange={v=>updateField('pcPoDenier',v)} onBlurSync={triggerSyncLatest} noAccess={fe('pcPoDenier')} isSectionLocked={isWeavingLocked}/>
+            <Input label="PC PO Ends" value={formData.pcPoEnds} onChange={v=>updateField('pcPoEnds',v)} onBlurSync={triggerSyncLatest} noAccess={fe('pcPoEnds')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Micro Denier" value={formData.microDenier} onChange={v=>updateField('microDenier',v)} onBlurSync={triggerSyncLatest} noAccess={fe('microDenier')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Micro Ends" value={formData.microEnds} onChange={v=>updateField('microEnds',v)} onBlurSync={triggerSyncLatest} noAccess={fe('microEnds')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Roll Weight" value={formData.raschelRollWeight} onChange={v=>updateField('raschelRollWeight',v)} onBlurSync={triggerSyncLatest} noAccess={fe('raschelRollWeight')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Pcs Weight Required" value={formData.pcsWeightRequired} onChange={v=>updateField('pcsWeightRequired',v)} onBlurSync={triggerSyncLatest} noAccess={fe('pcsWeightRequired')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Width" value={formData.raschelWidth} onChange={v=>updateField('raschelWidth',v)} onBlurSync={triggerSyncLatest} noAccess={fe('raschelWidth')} isSectionLocked={isWeavingLocked}/>
+            <Input label="After Raschel Size" value={formData.afterRaschelSize} onChange={v=>updateField('afterRaschelSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterRaschelSize')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Raschel Roll Length" value={formData.raschelRollLength} onChange={v=>updateField('raschelRollLength',v)} onBlurSync={triggerSyncLatest} noAccess={fe('raschelRollLength')} isSectionLocked={isWeavingLocked}/>
+            <Input label="Total No of Roll" value={formData.totalNoOfRoll} onChange={v=>updateField('totalNoOfRoll',v)} onBlurSync={triggerSyncLatest} noAccess={fe('totalNoOfRoll')} isSectionLocked={isWeavingLocked}/>
           </div>
           <SignaturePad title="Signature: Raschel Master" value={formData.sign_weavingRaschelMaster} onChange={v=>updateField('sign_weavingRaschelMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_weavingRaschelMaster')} noAccess={fe('sign_weavingRaschelMaster')} isSectionLocked={isWeavingLocked}/>
         </Section>
@@ -1292,10 +1340,10 @@ function App(){
         {/* SECTION 2: SLITTING */}
         <Section title="SLITTING DATA BY SLITTING MASTER" isSectionLocked={isSlittingLocked}>
           <div className="grid grid-cols-2 gap-2.5">
-            <Input label="Slitting Speed" value={formData.slittingSpeed} onChange={v=>updateField('slittingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('slittingSpeed')} isSectionLocked={isSlittingLocked}/>
-            <Input label="After Slitting Size" value={formData.afterSlittingSize} onChange={v=>updateField('afterSlittingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterSlittingSize')} isSectionLocked={isSlittingLocked}/>
-            <Input label="After Slitting Magnet" value={formData.afterSlittingMagnet} onChange={v=>updateField('afterSlittingMagnet',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterSlittingMagnet')} isSectionLocked={isSlittingLocked}/>
-            <Input label="Mending Check" value={formData.mendingCheck} onChange={v=>updateField('mendingCheck',v)} onBlurSync={()=>triggerSync()} noAccess={fe('mendingCheck')} isSectionLocked={isSlittingLocked}/>
+            <Input label="Slitting Speed" value={formData.slittingSpeed} onChange={v=>updateField('slittingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('slittingSpeed')} isSectionLocked={isSlittingLocked}/>
+            <Input label="After Slitting Size" value={formData.afterSlittingSize} onChange={v=>updateField('afterSlittingSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterSlittingSize')} isSectionLocked={isSlittingLocked}/>
+            <Input label="After Slitting Magnet" value={formData.afterSlittingMagnet} onChange={v=>updateField('afterSlittingMagnet',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterSlittingMagnet')} isSectionLocked={isSlittingLocked}/>
+            <Input label="Mending Check" value={formData.mendingCheck} onChange={v=>updateField('mendingCheck',v)} onBlurSync={triggerSyncLatest} noAccess={fe('mendingCheck')} isSectionLocked={isSlittingLocked}/>
           </div>
           <SignaturePad title="Signature: Slitting Master" value={formData.sign_slittingRaschelMaster} onChange={v=>updateField('sign_slittingRaschelMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_slittingRaschelMaster')} noAccess={fe('sign_slittingRaschelMaster')} isSectionLocked={isSlittingLocked}/>
         </Section>
@@ -1305,12 +1353,12 @@ function App(){
           <Input label="Stenter Process (YES/NO)" type="select" options={['NO','YES']} value={formData.stenterYesNo} onChange={v=>updateField('stenterYesNo',v)} noAccess={fe('stenterYesNo')} isSectionLocked={isStenter1Locked}/>
           {formData.stenterYesNo==='YES'&&(
             <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-              <Input label="Before Stenter Width" value={formData.beforeStenterWidth} onChange={v=>updateField('beforeStenterWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('beforeStenterWidth')} isSectionLocked={isStenter1Locked}/>
-              <Input label="Stenter Temp" value={formData.stenterTemp} onChange={v=>updateField('stenterTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterTemp')} isSectionLocked={isStenter1Locked}/>
-              <Input label="Top Blower Speed" value={formData.topBlowerSpeed} onChange={v=>updateField('topBlowerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('topBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
-              <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed} onChange={v=>updateField('bottomBlowerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bottomBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
-              <Input label="Stenter Speed" value={formData.stenterSpeed} onChange={v=>updateField('stenterSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterSpeed')} isSectionLocked={isStenter1Locked}/>
-              <Input label="After Stenter Size" value={formData.afterStenterSize} onChange={v=>updateField('afterStenterSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterStenterSize')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Before Stenter Width" value={formData.beforeStenterWidth} onChange={v=>updateField('beforeStenterWidth',v)} onBlurSync={triggerSyncLatest} noAccess={fe('beforeStenterWidth')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Stenter Temp" value={formData.stenterTemp} onChange={v=>updateField('stenterTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('stenterTemp')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Top Blower Speed" value={formData.topBlowerSpeed} onChange={v=>updateField('topBlowerSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('topBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed} onChange={v=>updateField('bottomBlowerSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('bottomBlowerSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="Stenter Speed" value={formData.stenterSpeed} onChange={v=>updateField('stenterSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('stenterSpeed')} isSectionLocked={isStenter1Locked}/>
+              <Input label="After Stenter Size" value={formData.afterStenterSize} onChange={v=>updateField('afterStenterSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterStenterSize')} isSectionLocked={isStenter1Locked}/>
             </div>
           )}
           <SignaturePad title="Signature: Stenter Master" value={formData.sign_stenterMaster1} onChange={v=>updateField('sign_stenterMaster1',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_stenterMaster1')} noAccess={fe('sign_stenterMaster1')} isSectionLocked={isStenter1Locked}/>
@@ -1321,26 +1369,26 @@ function App(){
           <Input label="Polish Before Brushing" type="select" options={['NO','YES']} value={formData.polishBeforeBrushingYesNo} onChange={v=>updateField('polishBeforeBrushingYesNo',v)} noAccess={fe('polishBeforeBrushingYesNo')} isSectionLocked={isGreyPolishLocked}/>
           {formData.polishBeforeBrushingYesNo==='YES'&&(
             <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-              <Input label="Polish Speed" value={formData.polishSpeed} onChange={v=>updateField('polishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polishSpeed')} isSectionLocked={isGreyPolishLocked}/>
-              <Input label="Polish Temp" value={formData.polishTemp} onChange={v=>updateField('polishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polishTemp')} isSectionLocked={isGreyPolishLocked}/>
-              <Input label="Table Brushing Speed" value={formData.tableBrushingSpeed} onChange={v=>updateField('tableBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('tableBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
+              <Input label="Polish Speed" value={formData.polishSpeed} onChange={v=>updateField('polishSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('polishSpeed')} isSectionLocked={isGreyPolishLocked}/>
+              <Input label="Polish Temp" value={formData.polishTemp} onChange={v=>updateField('polishTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('polishTemp')} isSectionLocked={isGreyPolishLocked}/>
+              <Input label="Table Brushing Speed" value={formData.tableBrushingSpeed} onChange={v=>updateField('tableBrushingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('tableBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
             </div>
           )}
           <div className="mt-3">
             <Input label="High Speed Brushing" type="select" options={['NO','YES']} value={formData.highSpeedBrushingYesNo} onChange={v=>updateField('highSpeedBrushingYesNo',v)} noAccess={fe('highSpeedBrushingYesNo')} isSectionLocked={isGreyPolishLocked}/>
             {formData.highSpeedBrushingYesNo==='YES'&&(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-                <Input label="High Speed Brushing Speed" value={formData.highSpeedBrushingSpeed} onChange={v=>updateField('highSpeedBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('highSpeedBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
-                <Input label="After High Speed Size" value={formData.afterHighSpeedBrushingSize} onChange={v=>updateField('afterHighSpeedBrushingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterHighSpeedBrushingSize')} isSectionLocked={isGreyPolishLocked}/>
+                <Input label="High Speed Brushing Speed" value={formData.highSpeedBrushingSpeed} onChange={v=>updateField('highSpeedBrushingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('highSpeedBrushingSpeed')} isSectionLocked={isGreyPolishLocked}/>
+                <Input label="After High Speed Size" value={formData.afterHighSpeedBrushingSize} onChange={v=>updateField('afterHighSpeedBrushingSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterHighSpeedBrushingSize')} isSectionLocked={isGreyPolishLocked}/>
               </div>
             )}
           </div>
           <div className="grid grid-cols-2 gap-2.5 mt-3">
-            <Input label="Polish Machines Used" value={formData.howManyPolishMachineUsed} onChange={v=>updateField('howManyPolishMachineUsed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolishMachineUsed')} isSectionLocked={isGreyPolishLocked}/>
-            <Input label="Cylinders Used" value={formData.howManyCylinderUsed} onChange={v=>updateField('howManyCylinderUsed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyCylinderUsed')} isSectionLocked={isGreyPolishLocked}/>
-            <Input label="Grey Polish Speed" value={formData.greyPolishSpeed} onChange={v=>updateField('greyPolishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('greyPolishSpeed')} isSectionLocked={isGreyPolishLocked}/>
-            <Input label="Grey Polish Temp" value={formData.greyPolishTemp} onChange={v=>updateField('greyPolishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('greyPolishTemp')} isSectionLocked={isGreyPolishLocked}/>
-            <Input label="After Grey Polish Size" value={formData.afterGreyPolishSize} onChange={v=>updateField('afterGreyPolishSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterGreyPolishSize')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Polish Machines Used" value={formData.howManyPolishMachineUsed} onChange={v=>updateField('howManyPolishMachineUsed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('howManyPolishMachineUsed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Cylinders Used" value={formData.howManyCylinderUsed} onChange={v=>updateField('howManyCylinderUsed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('howManyCylinderUsed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Grey Polish Speed" value={formData.greyPolishSpeed} onChange={v=>updateField('greyPolishSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('greyPolishSpeed')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="Grey Polish Temp" value={formData.greyPolishTemp} onChange={v=>updateField('greyPolishTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('greyPolishTemp')} isSectionLocked={isGreyPolishLocked}/>
+            <Input label="After Grey Polish Size" value={formData.afterGreyPolishSize} onChange={v=>updateField('afterGreyPolishSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterGreyPolishSize')} isSectionLocked={isGreyPolishLocked}/>
           </div>
           <SignaturePad title="Signature: Grey Polish Master" value={formData.sign_greyPolishMaster} onChange={v=>updateField('sign_greyPolishMaster',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_greyPolishMaster')} noAccess={fe('sign_greyPolishMaster')} isSectionLocked={isGreyPolishLocked}/>
         </Section>
@@ -1353,37 +1401,37 @@ function App(){
             {formData.printingDesignPhoto&&<img src={formData.printingDesignPhoto} alt="Design" className="h-28 object-contain border rounded-lg mt-2"/>}
           </div>
           <div className="grid grid-cols-2 gap-2.5">
-            <Input label="Chemical/Gum/Thickner" value={formData.printingChemical} onChange={v=>updateField('printingChemical',v)} onBlurSync={()=>triggerSync()} noAccess={fe('printingChemical')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Printing Repeat" value={formData.printingRepeat} onChange={v=>updateField('printingRepeat',v)} onBlurSync={()=>triggerSync()} noAccess={fe('printingRepeat')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Azer Holding Time" value={formData.azerHoldingTime} onChange={v=>updateField('azerHoldingTime',v)} onBlurSync={()=>triggerSync()} noAccess={fe('azerHoldingTime')} isSectionLocked={isPrintingLocked}/>
-            <Input label="After Azer Size" value={formData.afterAzerSize} onChange={v=>updateField('afterAzerSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterAzerSize')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Washing Chemical" value={formData.washingChemical} onChange={v=>updateField('washingChemical',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingChemical')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Washing Temp" value={formData.washingTemp} onChange={v=>updateField('washingTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingTemp')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Washing Speed" value={formData.washingSpeed} onChange={v=>updateField('washingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('washingSpeed')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Hydro" value={formData.hydro} onChange={v=>updateField('hydro',v)} onBlurSync={()=>triggerSync()} noAccess={fe('hydro')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Caustic" value={formData.caustic} onChange={v=>updateField('caustic',v)} onBlurSync={()=>triggerSync()} noAccess={fe('caustic')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Soaping" value={formData.soaping} onChange={v=>updateField('soaping',v)} onBlurSync={()=>triggerSync()} noAccess={fe('soaping')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Silicon 1" value={formData.silicon1} onChange={v=>updateField('silicon1',v)} onBlurSync={()=>triggerSync()} noAccess={fe('silicon1')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Silicon 2" value={formData.silicon2} onChange={v=>updateField('silicon2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('silicon2')} isSectionLocked={isPrintingLocked}/>
-            <Input label="Bouncing" value={formData.bouncing} onChange={v=>updateField('bouncing',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bouncing')} isSectionLocked={isPrintingLocked}/>
-            <Input label="After Washing Size" value={formData.afterWashingSize} onChange={v=>updateField('afterWashingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterWashingSize')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Chemical/Gum/Thickner" value={formData.printingChemical} onChange={v=>updateField('printingChemical',v)} onBlurSync={triggerSyncLatest} noAccess={fe('printingChemical')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Printing Repeat" value={formData.printingRepeat} onChange={v=>updateField('printingRepeat',v)} onBlurSync={triggerSyncLatest} noAccess={fe('printingRepeat')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Azer Holding Time" value={formData.azerHoldingTime} onChange={v=>updateField('azerHoldingTime',v)} onBlurSync={triggerSyncLatest} noAccess={fe('azerHoldingTime')} isSectionLocked={isPrintingLocked}/>
+            <Input label="After Azer Size" value={formData.afterAzerSize} onChange={v=>updateField('afterAzerSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterAzerSize')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Chemical" value={formData.washingChemical} onChange={v=>updateField('washingChemical',v)} onBlurSync={triggerSyncLatest} noAccess={fe('washingChemical')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Temp" value={formData.washingTemp} onChange={v=>updateField('washingTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('washingTemp')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Washing Speed" value={formData.washingSpeed} onChange={v=>updateField('washingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('washingSpeed')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Hydro" value={formData.hydro} onChange={v=>updateField('hydro',v)} onBlurSync={triggerSyncLatest} noAccess={fe('hydro')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Caustic" value={formData.caustic} onChange={v=>updateField('caustic',v)} onBlurSync={triggerSyncLatest} noAccess={fe('caustic')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Soaping" value={formData.soaping} onChange={v=>updateField('soaping',v)} onBlurSync={triggerSyncLatest} noAccess={fe('soaping')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Silicon 1" value={formData.silicon1} onChange={v=>updateField('silicon1',v)} onBlurSync={triggerSyncLatest} noAccess={fe('silicon1')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Silicon 2" value={formData.silicon2} onChange={v=>updateField('silicon2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('silicon2')} isSectionLocked={isPrintingLocked}/>
+            <Input label="Bouncing" value={formData.bouncing} onChange={v=>updateField('bouncing',v)} onBlurSync={triggerSyncLatest} noAccess={fe('bouncing')} isSectionLocked={isPrintingLocked}/>
+            <Input label="After Washing Size" value={formData.afterWashingSize} onChange={v=>updateField('afterWashingSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterWashingSize')} isSectionLocked={isPrintingLocked}/>
           </div>
           <div className="mt-3 border-t pt-3">
             <Input label="Dryer Process" type="select" options={['DRYER','STENTER']} value={formData.dryerProcess} onChange={v=>updateField('dryerProcess',v)} noAccess={fe('dryerProcess')} isSectionLocked={isPrintingLocked}/>
             {formData.dryerProcess==='STENTER'?(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="col-span-2 text-[10px] font-bold text-blue-800">&gt; STENTER DATA (PROCESS 2)</p>
-                <Input label="Stenter Speed" value={formData.stenterSpeed2} onChange={v=>updateField('stenterSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterSpeed2')} isSectionLocked={isStenter2Locked}/>
-                <Input label="Stenter Temp" value={formData.stenterTemp2} onChange={v=>updateField('stenterTemp2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('stenterTemp2')} isSectionLocked={isStenter2Locked}/>
-                <Input label="Top Blower Speed" value={formData.topBlowerSpeed2} onChange={v=>updateField('topBlowerSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('topBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
-                <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed2} onChange={v=>updateField('bottomBlowerSpeed2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('bottomBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
-                <Input label="After Stenter Size" value={formData.afterStenterSize2} onChange={v=>updateField('afterStenterSize2',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterStenterSize2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Stenter Speed" value={formData.stenterSpeed2} onChange={v=>updateField('stenterSpeed2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('stenterSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Stenter Temp" value={formData.stenterTemp2} onChange={v=>updateField('stenterTemp2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('stenterTemp2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Top Blower Speed" value={formData.topBlowerSpeed2} onChange={v=>updateField('topBlowerSpeed2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('topBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="Bottom Blower Speed" value={formData.bottomBlowerSpeed2} onChange={v=>updateField('bottomBlowerSpeed2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('bottomBlowerSpeed2')} isSectionLocked={isStenter2Locked}/>
+                <Input label="After Stenter Size" value={formData.afterStenterSize2} onChange={v=>updateField('afterStenterSize2',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterStenterSize2')} isSectionLocked={isStenter2Locked}/>
               </div>
             ):(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-orange-50 border border-orange-200 rounded-lg">
-                <Input label="Dryer Speed" value={formData.dryerSpeed} onChange={v=>updateField('dryerSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('dryerSpeed')} isSectionLocked={isPrintingLocked}/>
-                <Input label="Dryer Temp" value={formData.dryerTemp} onChange={v=>updateField('dryerTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('dryerTemp')} isSectionLocked={isPrintingLocked}/>
-                <Input label="After Dryer Size" value={formData.afterDryerSize} onChange={v=>updateField('afterDryerSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterDryerSize')} isSectionLocked={isPrintingLocked}/>
+                <Input label="Dryer Speed" value={formData.dryerSpeed} onChange={v=>updateField('dryerSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('dryerSpeed')} isSectionLocked={isPrintingLocked}/>
+                <Input label="Dryer Temp" value={formData.dryerTemp} onChange={v=>updateField('dryerTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('dryerTemp')} isSectionLocked={isPrintingLocked}/>
+                <Input label="After Dryer Size" value={formData.afterDryerSize} onChange={v=>updateField('afterDryerSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterDryerSize')} isSectionLocked={isPrintingLocked}/>
               </div>
             )}
           </div>
@@ -1398,21 +1446,21 @@ function App(){
           <Input label="Polish Before Brushing" type="select" options={['NO','YES']} value={formData.finishPolishBeforeBrushingYesNo} onChange={v=>updateField('finishPolishBeforeBrushingYesNo',v)} noAccess={fe('finishPolishBeforeBrushingYesNo')} isSectionLocked={isFinishingLocked}/>
           {formData.finishPolishBeforeBrushingYesNo==='YES'&&(
             <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-              <Input label="Polish Speed" value={formData.finishPolishSpeed} onChange={v=>updateField('finishPolishSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishPolishSpeed')} isSectionLocked={isFinishingLocked}/>
-              <Input label="Polish Temp" value={formData.finishPolishTemp} onChange={v=>updateField('finishPolishTemp',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishPolishTemp')} isSectionLocked={isFinishingLocked}/>
-              <Input label="After Polish Size" value={formData.afterPolishSize} onChange={v=>updateField('afterPolishSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterPolishSize')} isSectionLocked={isFinishingLocked}/>
+              <Input label="Polish Speed" value={formData.finishPolishSpeed} onChange={v=>updateField('finishPolishSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('finishPolishSpeed')} isSectionLocked={isFinishingLocked}/>
+              <Input label="Polish Temp" value={formData.finishPolishTemp} onChange={v=>updateField('finishPolishTemp',v)} onBlurSync={triggerSyncLatest} noAccess={fe('finishPolishTemp')} isSectionLocked={isFinishingLocked}/>
+              <Input label="After Polish Size" value={formData.afterPolishSize} onChange={v=>updateField('afterPolishSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterPolishSize')} isSectionLocked={isFinishingLocked}/>
             </div>
           )}
           <div className="grid grid-cols-2 gap-2.5 mt-3">
-            <Input label="Table Brushing Speed" value={formData.finishTableBrushingSpeed} onChange={v=>updateField('finishTableBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishTableBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
-            <Input label="After Brushing Size" value={formData.afterBrushingSize} onChange={v=>updateField('afterBrushingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterBrushingSize')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Table Brushing Speed" value={formData.finishTableBrushingSpeed} onChange={v=>updateField('finishTableBrushingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('finishTableBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
+            <Input label="After Brushing Size" value={formData.afterBrushingSize} onChange={v=>updateField('afterBrushingSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterBrushingSize')} isSectionLocked={isFinishingLocked}/>
           </div>
           <div className="mt-3">
             <Input label="High Speed Brushing" type="select" options={['NO','YES']} value={formData.finishHighSpeedBrushingYesNo} onChange={v=>updateField('finishHighSpeedBrushingYesNo',v)} noAccess={fe('finishHighSpeedBrushingYesNo')} isSectionLocked={isFinishingLocked}/>
             {formData.finishHighSpeedBrushingYesNo==='YES'&&(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-                <Input label="High Speed Brushing Speed" value={formData.finishHighSpeedBrushingSpeed} onChange={v=>updateField('finishHighSpeedBrushingSpeed',v)} onBlurSync={()=>triggerSync()} noAccess={fe('finishHighSpeedBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
-                <Input label="After High Speed Size" value={formData.afterHighSpeedSize} onChange={v=>updateField('afterHighSpeedSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterHighSpeedSize')} isSectionLocked={isFinishingLocked}/>
+                <Input label="High Speed Brushing Speed" value={formData.finishHighSpeedBrushingSpeed} onChange={v=>updateField('finishHighSpeedBrushingSpeed',v)} onBlurSync={triggerSyncLatest} noAccess={fe('finishHighSpeedBrushingSpeed')} isSectionLocked={isFinishingLocked}/>
+                <Input label="After High Speed Size" value={formData.afterHighSpeedSize} onChange={v=>updateField('afterHighSpeedSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterHighSpeedSize')} isSectionLocked={isFinishingLocked}/>
               </div>
             )}
           </div>
@@ -1420,25 +1468,25 @@ function App(){
             <Input label="Raising" type="select" options={['NO','YES']} value={formData.raisingYesNo} onChange={v=>updateField('raisingYesNo',v)} noAccess={fe('raisingYesNo')} isSectionLocked={isFinishingLocked}/>
             {formData.raisingYesNo==='YES'&&(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-                <Input label="Raising Machines" value={formData.howManyRaisingMachine} onChange={v=>updateField('howManyRaisingMachine',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyRaisingMachine')} isSectionLocked={isFinishingLocked}/>
-                <Input label="% Raising" value={formData.percentRaising} onChange={v=>updateField('percentRaising',v)} onBlurSync={()=>triggerSync()} noAccess={fe('percentRaising')} isSectionLocked={isFinishingLocked}/>
-                <Input label="After Raising Size" value={formData.afterRaisingSize} onChange={v=>updateField('afterRaisingSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterRaisingSize')} isSectionLocked={isFinishingLocked}/>
+                <Input label="Raising Machines" value={formData.howManyRaisingMachine} onChange={v=>updateField('howManyRaisingMachine',v)} onBlurSync={triggerSyncLatest} noAccess={fe('howManyRaisingMachine')} isSectionLocked={isFinishingLocked}/>
+                <Input label="% Raising" value={formData.percentRaising} onChange={v=>updateField('percentRaising',v)} onBlurSync={triggerSyncLatest} noAccess={fe('percentRaising')} isSectionLocked={isFinishingLocked}/>
+                <Input label="After Raising Size" value={formData.afterRaisingSize} onChange={v=>updateField('afterRaisingSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterRaisingSize')} isSectionLocked={isFinishingLocked}/>
               </div>
             )}
           </div>
           <div className="grid grid-cols-2 gap-2.5 mt-3 border-t pt-3">
-            <Input label="Polishers Final" value={formData.howManyPolisherFinal} onChange={v=>updateField('howManyPolisherFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolisherFinal')} isSectionLocked={isFinishingLocked}/>
-            <Input label="Polycuts Final" value={formData.howManyPolycutFinal} onChange={v=>updateField('howManyPolycutFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('howManyPolycutFinal')} isSectionLocked={isFinishingLocked}/>
-            <Input label="Polisher Speed" value={formData.polisherSpeedFinal} onChange={v=>updateField('polisherSpeedFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polisherSpeedFinal')} isSectionLocked={isFinishingLocked}/>
-            <Input label="Polisher Temp" value={formData.polisherTempFinal} onChange={v=>updateField('polisherTempFinal',v)} onBlurSync={()=>triggerSync()} noAccess={fe('polisherTempFinal')} isSectionLocked={isFinishingLocked}/>
-            <Input label="After Polisher Size" value={formData.afterFinalPolisherSize} onChange={v=>updateField('afterFinalPolisherSize',v)} onBlurSync={()=>triggerSync()} noAccess={fe('afterFinalPolisherSize')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polishers Final" value={formData.howManyPolisherFinal} onChange={v=>updateField('howManyPolisherFinal',v)} onBlurSync={triggerSyncLatest} noAccess={fe('howManyPolisherFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polycuts Final" value={formData.howManyPolycutFinal} onChange={v=>updateField('howManyPolycutFinal',v)} onBlurSync={triggerSyncLatest} noAccess={fe('howManyPolycutFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polisher Speed" value={formData.polisherSpeedFinal} onChange={v=>updateField('polisherSpeedFinal',v)} onBlurSync={triggerSyncLatest} noAccess={fe('polisherSpeedFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="Polisher Temp" value={formData.polisherTempFinal} onChange={v=>updateField('polisherTempFinal',v)} onBlurSync={triggerSyncLatest} noAccess={fe('polisherTempFinal')} isSectionLocked={isFinishingLocked}/>
+            <Input label="After Polisher Size" value={formData.afterFinalPolisherSize} onChange={v=>updateField('afterFinalPolisherSize',v)} onBlurSync={triggerSyncLatest} noAccess={fe('afterFinalPolisherSize')} isSectionLocked={isFinishingLocked}/>
           </div>
           <div className="mt-3 border-t pt-3">
             <Input label="Emboss" type="select" options={['NO','YES']} value={formData.embossYesNo} onChange={v=>updateField('embossYesNo',v)} noAccess={fe('embossYesNo')} isSectionLocked={isFinishingLocked}/>
             {formData.embossYesNo==='YES'&&(
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 p-2.5 bg-gray-50 border rounded-lg">
-                <Input label="Temp of Emboss" value={formData.tempOfEmboss} onChange={v=>updateField('tempOfEmboss',v)} onBlurSync={()=>triggerSync()} noAccess={fe('tempOfEmboss')} isSectionLocked={isFinishingLocked}/>
-                <Input label="Holding Time of Emboss" value={formData.holdingTimeOfEmboss} onChange={v=>updateField('holdingTimeOfEmboss',v)} onBlurSync={()=>triggerSync()} noAccess={fe('holdingTimeOfEmboss')} isSectionLocked={isFinishingLocked}/>
+                <Input label="Temp of Emboss" value={formData.tempOfEmboss} onChange={v=>updateField('tempOfEmboss',v)} onBlurSync={triggerSyncLatest} noAccess={fe('tempOfEmboss')} isSectionLocked={isFinishingLocked}/>
+                <Input label="Holding Time of Emboss" value={formData.holdingTimeOfEmboss} onChange={v=>updateField('holdingTimeOfEmboss',v)} onBlurSync={triggerSyncLatest} noAccess={fe('holdingTimeOfEmboss')} isSectionLocked={isFinishingLocked}/>
               </div>
             )}
           </div>
@@ -1448,12 +1496,12 @@ function App(){
         {/* SECTION 7: PACKING */}
         <Section title="PACKING DATA BY PACKING CONTRACTOR" isSectionLocked={isPackingLocked}>
           <div className="grid grid-cols-2 gap-2.5">
-            <Input label="Total Pcs" value={formData.totalPcs} onChange={v=>updateField('totalPcs',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalPcs')} isSectionLocked={isPackingLocked}/>
-            <Input label="Average Pcs Length" value={formData.averagePcsLength} onChange={v=>updateField('averagePcsLength',v)} onBlurSync={()=>triggerSync()} noAccess={fe('averagePcsLength')} isSectionLocked={isPackingLocked}/>
-            <Input label="Average Pcs Width" value={formData.averagePcsWidth} onChange={v=>updateField('averagePcsWidth',v)} onBlurSync={()=>triggerSync()} noAccess={fe('averagePcsWidth')} isSectionLocked={isPackingLocked}/>
-            <Input label="Avg Pcs Weight" value={formData.avgPcsWeight} onChange={v=>updateField('avgPcsWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('avgPcsWeight')} isSectionLocked={isPackingLocked}/>
-            <Input label="Total Waste Weight" value={formData.totalWasteWeight} onChange={v=>updateField('totalWasteWeight',v)} onBlurSync={()=>triggerSync()} noAccess={fe('totalWasteWeight')} isSectionLocked={isPackingLocked}/>
-            <Input label="Label" value={formData.label} onChange={v=>updateField('label',v)} onBlurSync={()=>triggerSync()} noAccess={fe('label')} isSectionLocked={isPackingLocked}/>
+            <Input label="Total Pcs" value={formData.totalPcs} onChange={v=>updateField('totalPcs',v)} onBlurSync={triggerSyncLatest} noAccess={fe('totalPcs')} isSectionLocked={isPackingLocked}/>
+            <Input label="Average Pcs Length" value={formData.averagePcsLength} onChange={v=>updateField('averagePcsLength',v)} onBlurSync={triggerSyncLatest} noAccess={fe('averagePcsLength')} isSectionLocked={isPackingLocked}/>
+            <Input label="Average Pcs Width" value={formData.averagePcsWidth} onChange={v=>updateField('averagePcsWidth',v)} onBlurSync={triggerSyncLatest} noAccess={fe('averagePcsWidth')} isSectionLocked={isPackingLocked}/>
+            <Input label="Avg Pcs Weight" value={formData.avgPcsWeight} onChange={v=>updateField('avgPcsWeight',v)} onBlurSync={triggerSyncLatest} noAccess={fe('avgPcsWeight')} isSectionLocked={isPackingLocked}/>
+            <Input label="Total Waste Weight" value={formData.totalWasteWeight} onChange={v=>updateField('totalWasteWeight',v)} onBlurSync={triggerSyncLatest} noAccess={fe('totalWasteWeight')} isSectionLocked={isPackingLocked}/>
+            <Input label="Label" value={formData.label} onChange={v=>updateField('label',v)} onBlurSync={triggerSyncLatest} noAccess={fe('label')} isSectionLocked={isPackingLocked}/>
           </div>
           <SignaturePad title="Signature: Packing Contractor" value={formData.sign_packingContractor} onChange={v=>updateField('sign_packingContractor',v)} onClearAttempt={()=>openAdminModal('clear_sig','sign_packingContractor')} noAccess={fe('sign_packingContractor')} isSectionLocked={isPackingLocked}/>
         </Section>
@@ -1476,7 +1524,7 @@ function App(){
         {/* SAVE BUTTON (non-admin) */}
         {currentUser.role!=='ADMIN'&&(
           <div className="mt-4 mb-4">
-            <button onClick={()=>triggerSync()} disabled={cloudSyncing}
+            <button onClick={triggerSyncLatest} disabled={cloudSyncing}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow flex items-center justify-center gap-2 text-sm active:scale-95 disabled:opacity-50">
               {cloudSyncing?<><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>Saving...</>:<>💾 Save My Section Data to Sheet</>}
             </button>
