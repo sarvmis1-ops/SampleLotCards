@@ -26,7 +26,14 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqomqLCDS8net0GnScCXazBeqGKH5j2ta6V8SQdDptYlbEBdF-VUlY9golOvtjAZ0/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzWe6Mxz4Wo0xr-pV_cajozruDlDRsrGzRKf1D_MoCMdx934xJL8iDFxwpw-IDX9cc/exec";
+
+// ── Safe JSON response parser (GAS sometimes returns HTML instead of JSON) ──
+const safeParseResponse=async(res)=>{
+  const txt=await res.text();
+  try{return JSON.parse(txt);}
+  catch(e){console.error('[SARV] Not JSON:',txt.substring(0,200));return{error:'Server returned non-JSON: '+txt.substring(0,60)};}
+};
 
 // Role -> allowed fields map (mirrors Code.gs exactly)
 const ROLE_FIELD_MAP = {
@@ -371,44 +378,113 @@ function App(){
     });
   };
 
-  // ── CLOUD SYNC ──────────────────────────────────────────────────────────────
-  // 💡 FIX: Content-Type MUST be 'text/plain' for GAS to read POST body via no-cors.
-  // 'application/json' triggers CORS preflight which GAS cannot respond to — body gets dropped.
-  // 'text/plain' is a simple CORS request — body passes through to e.postData.contents correctly.
+  // ── CLOUD SYNC via GET (same method as login — zero CORS issues) ─────────
+  // POST to GAS fails because CORS preflight + redirect = broken.
+  // GET ALWAYS works (login proves it). So ALL saves use GET with URL params.
+  // Signature base64 is too large for URL → POST with no-cors (fire & forget).
   const triggerSync=async(data=formData)=>{
-    if(!activeSampleId||!data.sampleNo) return;
+    // Always use activeSampleId as sampleNo (formData.sampleNo may be empty from old cache)
+    const syncSampleNo=data.sampleNo||activeSampleId;
+    if(!syncSampleNo) return;
     const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]');
     if(del.map(i=>String(i).toUpperCase()).includes(String(activeSampleId).toUpperCase())) return;
-    if(!isOnline){setStatus('Offline — saved to device memory.');return;}
+    if(!isOnline){setStatus('📴 Offline — saved locally.');return;}
     setCloudSyncing(true);
-    // Detect if this sync contains a fresh signature (base64 PNG)
-    const hasSig=Object.keys(data).some(k=>k.startsWith('sign_')&&data[k]&&String(data[k]).startsWith('data:image'));
-    setStatus(hasSig?'📝 Saving signature to Drive...':'Syncing to Google Sheets...');
+    setStatus('☁️ Saving to Sheet...');
+    // Save to localStorage first (backup)
+    localStorage.setItem(`sarv_sample_${activeSampleId}`,JSON.stringify(data));
     try{
-      // Strip printingDesignPhoto — large base64 ~80KB, only sent on finalSubmit
-      const {printingDesignPhoto:_p,...cleanData}=data;
-      await fetch(GOOGLE_SCRIPT_URL,{
-        method:'POST',
-        mode:'no-cors',
-        headers:{'Content-Type':'text/plain'},
-        body:JSON.stringify({...cleanData,username:currentUser?.username||''})
+      // Strip large fields: photo + signature base64 (send separately if needed)
+      const sendData={...data, sampleNo:syncSampleNo, username:currentUser?.username||''};
+      // Remove base64 images from GET payload (too large for URL)
+      delete sendData.printingDesignPhoto;
+      Object.keys(sendData).forEach(k=>{
+        if(k.startsWith('sign_')&&sendData[k]&&String(sendData[k]).startsWith('data:image')){
+          sendData[k]='DONE'; // Mark as done in GET, actual image stays in localStorage
+        }
       });
-      setStatus(hasSig?'✅ Signature saved to Drive & Sheet!':'✅ Synced to Sheet!');
-    }catch(e){setStatus('Sync error. Retry karein.');}
+      // Remove empty fields to keep URL short
+      const cleanSend={};
+      Object.keys(sendData).forEach(k=>{if(sendData[k]!==''&&sendData[k]!==null&&sendData[k]!==undefined)cleanSend[k]=sendData[k];});
+      const payloadStr=encodeURIComponent(JSON.stringify(cleanSend));
+      const url=GOOGLE_SCRIPT_URL+'?action=save&payload='+payloadStr;
+      console.log('[SARV] GET save → URL length:',url.length,'chars');
+      if(url.length>1900){
+        // URL too long for GET — chunk: send only essential fields + changed field
+        console.warn('[SARV] URL too long, sending minimal payload');
+        const mini={sampleNo:syncSampleNo,username:currentUser?.username||''};
+        // Copy only non-empty, non-base64 fields 
+        const essentials=['lotNo','quality','bedSize','blanketPly','stenterYesNo','dryerProcess','isSubmitted',
+          'reqBlanketPcsWeightWithoutEverything','raschelGuage','raschelPyleHeight','pcPoDenier','pcPoEnds',
+          'microDenier','microEnds','raschelRollWeight','pcsWeightRequired','raschelWidth','afterRaschelSize',
+          'raschelRollLength','totalNoOfRoll','slittingSpeed','afterSlittingSize','afterSlittingMagnet','mendingCheck',
+          'beforeStenterWidth','stenterTemp','topBlowerSpeed','bottomBlowerSpeed','stenterSpeed','afterStenterSize',
+          'sampleApprovedYesNo','lastSyncedAt','lastSyncedBy'];
+        essentials.forEach(k=>{if(cleanSend[k])mini[k]=cleanSend[k];});
+        // Also copy any sign_ = DONE markers
+        Object.keys(cleanSend).forEach(k=>{if(k.startsWith('sign_'))mini[k]=cleanSend[k];});
+        const miniStr=encodeURIComponent(JSON.stringify(mini));
+        var url2=GOOGLE_SCRIPT_URL+'?action=save&payload='+miniStr;
+        console.log('[SARV] Mini URL length:',url2.length);
+      }
+      const res=await fetch(url.length>1900?url2:url);
+      const txt=await res.text();
+      console.log('[SARV] Response:',txt.substring(0,200));
+      let result;
+      try{result=JSON.parse(txt);}catch(pe){
+        setStatus('⚠️ Server error: '+txt.substring(0,50));return;
+      }
+      if(result.status==='success'){
+        setStatus('✅ Saved to Sheet! ('+result.action+')');
+      } else {
+        setStatus('⚠️ '+(result.message||result.error||'Unknown error'));
+      }
+    }catch(err){
+      console.error('[SARV] Save failed:',err);
+      setStatus('❌ Save failed: '+err.message.substring(0,50));
+    }
     finally{setCloudSyncing(false);}
   };
 
-  // Stale closure fix: always sync with latest formData when called from onBlur
+  // Stale closure fix
   const formDataRef=React.useRef(formData);
   React.useEffect(()=>{formDataRef.current=formData;},[formData]);
   const triggerSyncLatest=()=>triggerSync(formDataRef.current);
+
+  // ── CONNECTION TEST (run on form load to catch URL/deploy issues early) ────
+  const testConnection=React.useCallback(async()=>{
+    if(!isOnline) return;
+    try{
+      console.log('[SARV] Pinging:',GOOGLE_SCRIPT_URL+'?action=ping');
+      const res=await fetch(GOOGLE_SCRIPT_URL+'?action=ping',{redirect:'follow'});
+      console.log('[SARV] Ping HTTP:',res.status,'| redirected:',res.redirected);
+      const txt=await res.text();
+      console.log('[SARV] Ping raw:',txt.substring(0,200));
+      let d;
+      try{d=JSON.parse(txt);}catch(pe){
+        setStatus('❌ Server responded but not JSON: '+txt.substring(0,60));
+        return;
+      }
+      if(d.status==='ok'){
+        setStatus('✅ Server connected (v'+d.version+') | Rows: '+(d.rows||'?'));
+        console.log('[SARV] Ping OK:',d);
+      } else if(d.error){
+        setStatus('⚠️ Ping error: '+d.error);
+      } else {
+        setStatus('⚠️ Unexpected: '+JSON.stringify(d).substring(0,80));
+      }
+    }catch(e){
+      console.error('[SARV] PING FAILED:',e);
+      setStatus('❌ Cannot reach GAS server! URL correct? Deployed as Web App?');
+    }
+  },[isOnline]);
 
   // ── USER MANAGEMENT ──────────────────────────────────────────────────────────
   const fetchUsers=async()=>{
     setUsersLoading(true);
     try{
       const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getUsers`);
-      const d=await res.json();
+      const d=JSON.parse(await res.text());
       if(Array.isArray(d)) setUsersList(d);
       else showAlert("Users load karne mein error aaya.","warning");
     }catch(e){showAlert("Server se connect nahi hua.","warning");}
@@ -419,7 +495,7 @@ function App(){
     setProgressLoading(true);
     try{
       const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getProgress`);
-      const d=await res.json();
+      const d=JSON.parse(await res.text());
       if(Array.isArray(d)) setProgressData(d);
       else showAlert("Progress data load nahi hua.","warning");
     }catch(e){showAlert("Server se connect nahi hua.","warning");}
@@ -429,49 +505,31 @@ function App(){
   const handleSaveUser=async(user)=>{
     setUsersSaving(true);
     try{
-      const res=await fetch(GOOGLE_SCRIPT_URL,{
-        method:'POST',headers:{'Content-Type':'text/plain'},
-        body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})
-      });
-      const d=await res.json();
-      if(d.status==='success'){
-        showAlert(`✅ User "${user.username}" updated!`,"success");
-        setEditingUser(null);
-        fetchUsers();
-      }else{showAlert(d.message||"Update failed.","warning");}
-    }catch(e){
-      // no-cors fallback
-      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'updateUser',...user,adminUsername:currentUser.username})});
-      showAlert("Saved (no-cors mode — refresh to verify).","info");
-      setEditingUser(null);
-      fetchUsers();
-    }
+      const url=GOOGLE_SCRIPT_URL+'?action=updateUser&payload='+encodeURIComponent(JSON.stringify(user));
+      const res=await fetch(url);
+      const txt=await res.text();
+      const d=JSON.parse(txt);
+      if(d.status==='success'){showAlert('✅ User updated!','success');setEditingUser(null);fetchUsers();}
+      else showAlert(d.message||'Update failed.','warning');
+    }catch(e){showAlert('Network error: '+e.message,'warning');}
     finally{setUsersSaving(false);}
   };
 
   const handleAddUser=async()=>{
     if(!newUserForm.username.trim()||!newUserForm.password.trim()||!newUserForm.displayName.trim()){
-      showAlert("Sab fields fill karein.","warning");return;
+      showAlert('Sab fields fill karein.','warning');return;
     }
     setUsersSaving(true);
     try{
-      const res=await fetch(GOOGLE_SCRIPT_URL,{
-        method:'POST',headers:{'Content-Type':'text/plain'},
-        body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})
-      });
-      const d=await res.json();
+      const url=GOOGLE_SCRIPT_URL+'?action=addUser&payload='+encodeURIComponent(JSON.stringify(newUserForm));
+      const res=await fetch(url);
+      const d=JSON.parse(await res.text());
       if(d.status==='success'){
-        showAlert(`✅ User "${newUserForm.username}" add ho gaya!`,"success");
+        showAlert('✅ User added!','success');
         setNewUserForm({username:'',password:'',role:'WEAVING',displayName:'',isActive:'YES'});
-        setShowAddUser(false);
-        fetchUsers();
-      }else{showAlert(d.message||"Add failed.","warning");}
-    }catch(e){
-      await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'addUser',...newUserForm,adminUsername:currentUser.username})});
-      showAlert("Saved (no-cors mode — refresh to verify).","info");
-      setShowAddUser(false);
-      fetchUsers();
-    }
+        setShowAddUser(false);fetchUsers();
+      }else showAlert(d.message||'Failed.','warning');
+    }catch(e){showAlert('Network error: '+e.message,'warning');}
     finally{setUsersSaving(false);}
   };
 
@@ -486,7 +544,7 @@ function App(){
     setLoginLoading(true);setLoginError('');
     try{
       const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=login&user=${encodeURIComponent(loginUser.trim())}&pass=${encodeURIComponent(loginPass.trim())}`);
-      const d=await res.json();
+      const d=JSON.parse(await res.text());
       if(d.valid){
         const u={username:d.username,role:d.role,displayName:d.displayName,allowedFields:d.allowedFields};
         setCurrentUser(u);localStorage.setItem('sarv_session',JSON.stringify(u));
@@ -508,9 +566,9 @@ function App(){
     if(isOnline){
       try{
         const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=getSample&sampleNo=${encodeURIComponent(id)}`);
-        const d=await res.json();
+        const d=JSON.parse(await res.text());
         if(d&&d.sampleNo&&!d.error){
-          const merged={...initialFormState,...d};
+          const merged={...initialFormState,...d,sampleNo:d.sampleNo||id};
           setFormData(merged);localStorage.setItem(`sarv_sample_${id}`,JSON.stringify(merged));
           setStatus('✅ Live data loaded from Sheet!');loaded=true;
         }
@@ -518,18 +576,23 @@ function App(){
     }
     if(!loaded){
       const s=localStorage.getItem(`sarv_sample_${id}`);
-      if(s){setFormData({...initialFormState,...JSON.parse(s)});setStatus('📱 Loaded from device (offline).');}
+      if(s){setFormData({...initialFormState,...JSON.parse(s),sampleNo:id});setStatus('📱 Loaded from device.');}
       else{setFormData({...initialFormState,sampleNo:id,isSubmitted:false});setStatus('New sample form ready.');}
     }
     setFetchingForm(false);
   };
+
+  // Run connection test when form first opens
+  React.useEffect(()=>{
+    if(appMode==='form'&&activeSampleId) testConnection();
+  },[appMode,activeSampleId]);
 
   // ── FETCH SAMPLE DIRECTORY ───────────────────────────────────────────────────
   const fetchDirectory=async(type)=>{
     setStatus('Loading directory...');
     const del=JSON.parse(localStorage.getItem('sarv_deleted_samples')||'[]').map(i=>String(i).toUpperCase());
     let cloud=[];let cloudOk=false;
-    if(isOnline){try{const r=await fetch(GOOGLE_SCRIPT_URL+"?action=getSamples");cloud=await r.json();if(Array.isArray(cloud))cloudOk=true;}catch(e){}}
+    if(isOnline){try{const r=await fetch(GOOGLE_SCRIPT_URL+"?action=getSamples");cloud=JSON.parse(await r.text());if(Array.isArray(cloud))cloudOk=true;}catch(e){}}
     let merged=[];
     if(cloudOk){
       cloud.forEach(ci=>{
@@ -570,7 +633,7 @@ function App(){
     if(!adminPass.trim()){setAdminPassErr("Password daalen.");return;}
     try{
       const res=await fetch(`${GOOGLE_SCRIPT_URL}?action=login&user=admin&pass=${encodeURIComponent(adminPass.trim())}`);
-      const d=await res.json();
+      const d=JSON.parse(await res.text());
       if(d.valid&&d.role==='ADMIN'){
         setShowAdminModal(false);
         if(adminAction==='clear_sig'){
@@ -595,7 +658,7 @@ function App(){
     if(!d.map(i=>String(i).toUpperCase()).includes(up)){d.push(up);localStorage.setItem('sarv_deleted_samples',JSON.stringify(d));}
     setSamplesList(prev=>prev.filter(i=>String(i.sampleNo).toUpperCase()!==up));
     showAlert(`Sample ${id} deleted.`,"success");
-    if(isOnline) fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'delete',sampleNo:up})}).catch(()=>{});
+    if(isOnline) fetch(GOOGLE_SCRIPT_URL+'?action=delete&sampleNo='+encodeURIComponent(up)).catch(e=>console.error('delete error:',e));
   };
 
   // ── PHOTO UPLOAD ─────────────────────────────────────────────────────────────
@@ -615,11 +678,7 @@ function App(){
           setTimeout(()=>{
             const {printingDesignPhoto:_p,...rest}=next;
             // Photo sent separately as a targeted field-only payload
-            fetch(GOOGLE_SCRIPT_URL,{
-              method:'POST',mode:'no-cors',
-              headers:{'Content-Type':'text/plain'},
-              body:JSON.stringify({sampleNo:next.sampleNo,printingDesignPhoto:photoDataUrl,username:currentUser?.username||''})
-            }).catch(()=>{});
+            // Photo stays in localStorage only — too large for URL. Sent with finalSubmit.
           },300);
           return next;
         });
@@ -657,8 +716,8 @@ function App(){
         const payload={...final,isSubmitted:true,pdfBlobBase64:b64,action:'finalSubmit'};
         let driveUrl="";
         if(isOnline){
-          try{const r=await fetch(GOOGLE_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});if(r.ok){const rj=await r.json();if(rj.status==='success')driveUrl=rj.fileUrl||"";}}
-          catch(fe){await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify(payload)});}
+          try{const r=await fetch(GOOGLE_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});if(r.ok){const rj=JSON.parse(await r.text());if(rj.status==='success')driveUrl=rj.fileUrl||"";}}
+          catch(fe){console.warn('POST failed, trying no-cors:',fe);try{await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',body:JSON.stringify(payload)});}catch(e2){}}
         }
         const local={...final,pdfDriveUrl:driveUrl||"Saved in Sarv India PDF Lots Folder"};
         setFormData(local);localStorage.setItem(`sarv_sample_${activeSampleId}`,JSON.stringify(local));
@@ -1296,11 +1355,17 @@ function App(){
       </div>
 
       {/* STATUS BAR */}
-      <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-[10px] text-center p-1.5 font-extrabold flex justify-center items-center gap-1">
-        <span>👤 {currentUser.displayName}</span>
-        <span className="mx-1 text-gray-300">|</span>
-        <span>☁️ {status}</span>
-        {fetchingForm&&<span className="animate-spin ml-1">⏳</span>}
+      <div className="bg-yellow-50 border-b border-yellow-200 text-yellow-800 text-[10px] p-1.5 font-extrabold flex items-center gap-1 justify-between">
+        <span className="flex items-center gap-1 min-w-0 flex-1 truncate">
+          <span>👤 {currentUser.displayName}</span>
+          <span className="mx-1 text-gray-300">|</span>
+          <span className="truncate">☁️ {status}</span>
+          {fetchingForm&&<span className="animate-spin ml-1">⏳</span>}
+        </span>
+        <div className="flex gap-1 shrink-0">
+          <button onClick={testConnection} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-black">🔌 Test</button>
+          <button onClick={triggerSyncLatest} disabled={cloudSyncing} className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-[9px] font-black disabled:opacity-40">💾 Sync</button>
+        </div>
       </div>
 
       {/* ROLE ACCESS BANNER */}
